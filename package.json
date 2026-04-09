@@ -1,0 +1,10 @@
+{
+  "name": "mod-server-project",
+  "version": "1.0.0",
+  "description": "Mod Server Management System",
+  "scripts": {
+    "build": "docker-compose build",
+    "up": "docker-compose up",
+    "down": "docker-compose down"
+  }
+}
