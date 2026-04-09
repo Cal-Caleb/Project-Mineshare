@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -14,7 +16,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/login")
 async def login(settings: Settings = Depends(get_settings)):
-    """Redirect user to Discord OAuth2 consent screen."""
+    """Redirect user to Discord OAuth2 consent screen.
+
+    Discord will redirect back to DISCORD_REDIRECT_URI (/api/auth/callback).
+    """
     url = (
         "https://discord.com/api/oauth2/authorize"
         f"?client_id={settings.discord_client_id}"
@@ -25,13 +30,22 @@ async def login(settings: Settings = Depends(get_settings)):
     return RedirectResponse(url)
 
 
-@router.get("/callback", response_model=TokenResponse)
+@router.get("/callback")
 async def callback(
     code: str = Query(...),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Exchange Discord OAuth2 code for an access token."""
+    """Exchange Discord OAuth2 code, then redirect to frontend with JWT.
+
+    Flow:
+      1. Discord redirects here with ?code=...
+      2. We exchange the code for a Discord access token
+      3. We fetch user info + guild roles
+      4. We upsert the user in our DB
+      5. We issue our own JWT
+      6. We redirect to the frontend at /auth/callback?token=<jwt>
+    """
     async with httpx.AsyncClient() as client:
         # 1. Exchange code for Discord token
         token_resp = await client.post(
@@ -47,7 +61,7 @@ async def callback(
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if token_resp.status_code != 200:
-            raise HTTPException(400, "Failed to exchange code with Discord")
+            return _frontend_error(settings, "Failed to authenticate with Discord")
 
         tokens = token_resp.json()
         discord_token = tokens["access_token"]
@@ -58,7 +72,7 @@ async def callback(
             headers={"Authorization": f"Bearer {discord_token}"},
         )
         if user_resp.status_code != 200:
-            raise HTTPException(400, "Failed to get Discord user info")
+            return _frontend_error(settings, "Failed to get Discord user info")
 
         discord_user = user_resp.json()
         discord_id = discord_user["id"]
@@ -78,7 +92,7 @@ async def callback(
                 if settings.discord_role2_id in member_roles:
                     role = UserRole.ADMIN
             else:
-                raise HTTPException(403, "You are not a member of the server's Discord guild")
+                return _frontend_error(settings, "You are not a member of the server Discord")
 
     # 4. Upsert user
     db_user = db.query(User).filter(User.discord_id == discord_id).first()
@@ -101,7 +115,11 @@ async def callback(
     # 5. Issue our JWT
     jwt_token = create_access_token(db_user.id, discord_id, role.value)
 
-    return TokenResponse(
-        access_token=jwt_token,
-        user=UserOut.model_validate(db_user),
-    )
+    # 6. Redirect to frontend with token
+    frontend = settings.frontend_url.rstrip("/")
+    return RedirectResponse(f"{frontend}/auth/callback?token={jwt_token}")
+
+
+def _frontend_error(settings: Settings, message: str) -> RedirectResponse:
+    frontend = settings.frontend_url.rstrip("/")
+    return RedirectResponse(f"{frontend}/auth/callback?error={urlencode({'m': message})}")

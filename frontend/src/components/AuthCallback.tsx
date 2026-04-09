@@ -2,20 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 /**
- * Handles the OAuth2 callback. The backend redirects here with
- * ?access_token=...&user=... after Discord auth.
+ * Handles the OAuth2 callback redirect from the backend.
  *
- * Actually, the backend /api/auth/callback returns JSON with the token.
- * So the flow is:
- *  1. Frontend opens /api/auth/login (redirects to Discord)
- *  2. Discord redirects back to /api/auth/callback
- *  3. Backend returns JSON { access_token, user }
- *
- * We need to handle this by having the frontend intercept the callback.
- * The simplest approach: backend redirects to frontend with token in hash.
- *
- * For now, the auth route returns JSON. The frontend opens the login URL
- * in the same window. We'll adjust the backend to redirect to frontend.
+ * Flow:
+ *   1. User clicks "Sign in with Discord" -> /api/auth/login
+ *   2. Backend redirects to Discord -> Discord redirects to /api/auth/callback
+ *   3. Backend exchanges code, creates JWT, redirects to /auth/callback?token=<jwt>
+ *   4. This component stores the token and redirects to /
  */
 export default function AuthCallback() {
   const [searchParams] = useSearchParams();
@@ -24,30 +17,16 @@ export default function AuthCallback() {
 
   useEffect(() => {
     const token = searchParams.get("token");
+    const err = searchParams.get("error");
+
     if (token) {
       localStorage.setItem("token", token);
-      navigate("/", { replace: true });
-      window.location.reload();
+      // Full reload so AuthContext picks up the new token
+      window.location.href = "/";
+    } else if (err) {
+      setError(decodeURIComponent(err));
     } else {
-      // Try fetching from the API callback directly
-      const code = searchParams.get("code");
-      if (code) {
-        const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
-        fetch(`${apiUrl}/auth/callback?code=${code}`)
-          .then((r) => r.json())
-          .then((data) => {
-            if (data.access_token) {
-              localStorage.setItem("token", data.access_token);
-              navigate("/", { replace: true });
-              window.location.reload();
-            } else {
-              setError("Authentication failed");
-            }
-          })
-          .catch(() => setError("Authentication failed"));
-      } else {
-        setError("No auth code received");
-      }
+      setError("No authentication token received");
     }
   }, [searchParams, navigate]);
 
@@ -56,7 +35,10 @@ export default function AuthCallback() {
       <div className="flex min-h-screen items-center justify-center bg-space-dark">
         <div className="text-center">
           <p className="font-mono text-red-400">{error}</p>
-          <a href="/" className="mt-4 inline-block font-mono text-sm text-gold underline">
+          <a
+            href="/"
+            className="mt-4 inline-block font-mono text-sm text-gold underline"
+          >
             Try again
           </a>
         </div>

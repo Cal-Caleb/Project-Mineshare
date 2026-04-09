@@ -9,7 +9,7 @@ import type {
   Vote,
 } from "./types";
 
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
+const BASE = import.meta.env.VITE_API_URL ?? "/api";
 
 function getToken(): string | null {
   return localStorage.getItem("token");
