@@ -1,135 +1,157 @@
-import React, { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { listMods, removeMod } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { useSSE } from "../hooks/useSSE";
+import type { Mod } from "../lib/types";
 
-const ModCatalogue = () => {
-  const [mods, setMods] = useState<any[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+const card = "rounded-xl border border-white/5 bg-space-gray/60 backdrop-blur";
+
+export default function ModCatalogue() {
+  const [mods, setMods] = useState<Mod[]>([]);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<"all" | "active" | "pending_vote" | "removed">("all");
+  const { user, isAdmin } = useAuth();
 
-  useEffect(() => {
-    // Simulate fetching mods
-    const fetchMods = () => {
-      setTimeout(() => {
-        setMods([
-          {
-            id: 1,
-            name: "Sodium",
-            status: "active",
-            version: "0.4.1",
-            author: "JellySquid",
-            downloads: 125000,
-            lastUpdate: "2023-05-10"
-          },
-          {
-            id: 2,
-            name: "OptiFine",
-            status: "active",
-            version: "1.19.4 HD U H6",
-            author: "sp614x",
-            downloads: 850000,
-            lastUpdate: "2023-05-12"
-          },
-          {
-            id: 3,
-            name: "Phantom",
-            status: "pending",
-            version: "1.0.0",
-            author: "Player123",
-            downloads: 1200,
-            lastUpdate: "2023-05-14"
-          },
-          {
-            id: 4,
-            name: "Lithium",
-            status: "active",
-            version: "0.11.1",
-            author: "JellySquid",
-            downloads: 450000,
-            lastUpdate: "2023-05-05"
-          }
-        ]);
-        setLoading(false);
-      }, 500);
-    };
+  const fetchMods = useCallback(() => {
+    const status = filter === "all" ? undefined : filter;
+    listMods(status)
+      .then(setMods)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [filter]);
 
-    fetchMods();
-  }, []);
+  useEffect(() => { fetchMods(); }, [fetchMods]);
+  useSSE(fetchMods, ["mod_added", "mod_removed", "mod_updated", "vote_resolved"]);
 
-  const filteredMods = mods.filter(mod => 
-    mod.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    mod.author.toLowerCase().includes(searchTerm.toLowerCase())
+  const filtered = mods.filter(
+    (m) =>
+      m.name.toLowerCase().includes(search.toLowerCase()) ||
+      (m.author ?? "").toLowerCase().includes(search.toLowerCase())
   );
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-yellow-500"></div>
-      </div>
-    );
-  }
+  const handleRemove = async (mod: Mod, force: boolean) => {
+    if (!confirm(`Remove "${mod.name}"${force ? " immediately" : " (starts a vote)"}?`)) return;
+    try {
+      await removeMod(mod.id, force);
+      fetchMods();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const statusColor: Record<string, string> = {
+    active: "bg-emerald-500/20 text-emerald-300",
+    pending_vote: "bg-amber-500/20 text-amber-300",
+    pending_approval: "bg-orange-500/20 text-orange-300",
+    removed: "bg-red-500/20 text-red-300",
+  };
+
+  const fade = {
+    initial: { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0 },
+  };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold">Mod Catalogue</h1>
-      
-      <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Available Mods</h2>
-          <div className="relative">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-gray-700 border border-gray-600 rounded px-4 py-2 pl-10 focus:outline-none focus:ring-2 focus:ring-yellow-500"
-              placeholder="Search mods..."
-            />
-            <svg 
-              className="w-5 h-5 absolute left-3 top-2.5 text-gray-400" 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24" 
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-              />
-            </svg>
+    <motion.div {...fade} className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="font-serif text-3xl text-gold-light">Mod Catalogue</h1>
+
+        <div className="flex items-center gap-3">
+          {/* Filter tabs */}
+          <div className="flex rounded-lg border border-white/10 overflow-hidden">
+            {(["all", "active", "pending_vote", "removed"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1.5 font-mono text-xs transition ${
+                  filter === f
+                    ? "bg-gold/20 text-gold"
+                    : "text-white/40 hover:text-white/70"
+                }`}
+              >
+                {f.replace("_", " ")}
+              </button>
+            ))}
           </div>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredMods.map((mod) => (
-            <div key={mod.id} className="bg-gray-750 p-4 rounded-lg border border-gray-700 hover:border-yellow-500 transition">
-              <div className="flex justify-between items-start mb-2">
-                <h3 className="text-lg font-semibold">{mod.name}</h3>
-                <span className={`px-2 py-1 text-xs rounded-full ${
-                  mod.status === 'active' ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'
-                }`}>
-                  {mod.status}
-                </span>
-              </div>
-              
-              <p className="text-sm text-gray-400 mb-2">by {mod.author}</p>
-              
-              <div className="flex justify-between text-sm mb-3">
-                <span>Version: {mod.version}</span>
-                <span>{mod.downloads.toLocaleString()} downloads</span>
-              </div>
-              
-              <div className="flex justify-between text-xs text-gray-500">
-                <span>Last updated: {mod.lastUpdate}</span>
-                <button className="text-yellow-500 hover:text-yellow-400 transition">
-                  View Details
-                </button>
-              </div>
-            </div>
-          ))}
+
+          {/* Search */}
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-48 rounded-lg border border-white/10 bg-space-dark px-3 py-1.5 font-mono text-sm text-white placeholder:text-white/20 focus:border-gold/30 focus:outline-none"
+            placeholder="Search..."
+          />
         </div>
       </div>
-    </div>
-  );
-};
 
-export default ModCatalogue;
+      {loading ? (
+        <div className="flex justify-center py-20">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-gold border-t-transparent" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className={`${card} p-12 text-center`}>
+          <p className="font-mono text-white/30">No mods found</p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((mod, i) => (
+            <motion.div
+              key={mod.id}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.04 }}
+              className={`${card} p-5 group hover:border-gold/20 transition-colors`}
+            >
+              <div className="flex items-start justify-between mb-2">
+                <h3 className="font-serif text-lg text-white">{mod.name}</h3>
+                <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] ${statusColor[mod.status] ?? ""}`}>
+                  {mod.status.replace("_", " ")}
+                </span>
+              </div>
+
+              {mod.author && (
+                <p className="font-mono text-xs text-white/30">by {mod.author}</p>
+              )}
+
+              <div className="mt-3 flex items-center justify-between font-mono text-xs text-white/40">
+                <span>{mod.current_version ?? "—"}</span>
+                <span className="capitalize">{mod.source}</span>
+              </div>
+
+              {mod.download_count > 0 && (
+                <p className="mt-1 font-mono text-[10px] text-white/20">
+                  {mod.download_count.toLocaleString()} downloads
+                </p>
+              )}
+
+              {/* Actions */}
+              {mod.status === "active" && user && (
+                <div className="mt-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {(mod.added_by?.id === user.id || isAdmin) && (
+                    <button
+                      onClick={() => handleRemove(mod, false)}
+                      className="flex-1 rounded border border-red-500/20 py-1 font-mono text-xs text-red-400 hover:bg-red-500/10 transition"
+                    >
+                      Vote Remove
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleRemove(mod, true)}
+                      className="flex-1 rounded border border-red-500/30 py-1 font-mono text-xs text-red-300 hover:bg-red-500/20 transition"
+                    >
+                      Force Remove
+                    </button>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </motion.div>
+  );
+}

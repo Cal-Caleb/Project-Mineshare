@@ -1,45 +1,44 @@
-import React, { useState, useEffect } from 'react';
-import './App.css';
-import Dashboard from './components/Dashboard';
-import ModCatalogue from './components/ModCatalogue';
-import AddMod from './components/AddMod';
-import ActiveVotes from './components/ActiveVotes';
-import AuditHistory from './components/AuditHistory';
-import AdminPanel from './components/AdminPanel';
-import Navbar from './components/Navbar';
-import Starfield from './components/Starfield';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { AnimatePresence } from "framer-motion";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import Starfield from "./components/Starfield";
+import Navbar from "./components/Navbar";
+import LoginScreen from "./components/LoginScreen";
+import SetupUsername from "./components/SetupUsername";
+import AuthCallback from "./components/AuthCallback";
+import Dashboard from "./components/Dashboard";
+import ModCatalogue from "./components/ModCatalogue";
+import AddMod from "./components/AddMod";
+import ActiveVotes from "./components/ActiveVotes";
+import AuditHistory from "./components/AuditHistory";
+import AdminPanel from "./components/AdminPanel";
 
-function App() {
-  const [isLoading, setIsLoading] = useState(true);
+function AppRoutes() {
+  const { user, loading, needsUsername } = useAuth();
 
-  useEffect(() => {
-    // Simulate loading
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (isLoading) {
+  if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-space-dark">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-yellow-500 mx-auto mb-4"></div>
-          <p className="text-xl">Loading ModServer...</p>
+          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-2 border-gold border-t-transparent" />
+          <p className="mt-4 font-mono text-sm text-white/40">
+            Loading MineShare...
+          </p>
         </div>
       </div>
     );
   }
 
+  if (!user) return <LoginScreen />;
+  if (needsUsername) return <SetupUsername />;
+
   return (
-    <Router>
-      <div className="min-h-screen bg-gray-900 text-white relative overflow-hidden">
-        <Starfield />
-        <div className="relative z-10">
-          <Navbar />
-          <div className="container mx-auto px-4 py-8">
+    <div className="relative min-h-screen bg-space-dark text-white">
+      <Starfield />
+      <div className="relative z-10">
+        <Navbar />
+        <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+          <AnimatePresence mode="wait">
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/mods" element={<ModCatalogue />} />
@@ -48,11 +47,22 @@ function App() {
               <Route path="/audit" element={<AuditHistory />} />
               <Route path="/admin" element={<AdminPanel />} />
             </Routes>
-          </div>
-        </div>
+          </AnimatePresence>
+        </main>
       </div>
-    </Router>
+    </div>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="*" element={<AppRoutes />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}

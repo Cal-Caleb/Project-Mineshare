@@ -1,109 +1,316 @@
-import requests
 import hashlib
-import os
-from typing import Dict, List, Optional
+import logging
+import zipfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import httpx
+from sqlalchemy.orm import Session
+
+from core.config import get_settings
+from models import (
+    AuditLog,
+    EventSource,
+    Mod,
+    ModSource,
+    ModStatus,
+    User,
+    UserRole,
+)
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
-class Mod:
-    id: int
+class CurseForgeModInfo:
+    project_id: int
     name: str
-    source_url: str
-    curse_id: int
-    file_hash: str
-    added_by: str
-    added_at: datetime
-    status: str  # active, inactive, pending
-
-@dataclass
-class CurseForgeMod:
-    id: int
-    name: str
-    latest_file_id: int
-    latest_file_name: str
-    latest_file_url: str
-    latest_file_date: str
+    slug: str
+    summary: str
+    author: str
+    logo_url: str | None
+    latest_file_id: int | None
+    latest_file_name: str | None
+    latest_file_date: str | None
     download_count: int
 
+
 class ModManager:
-    def __init__(self, curse_api_key: str = None):
-        self.curse_api_key = curse_api_key
+    def __init__(self):
+        settings = get_settings()
+        self.api_key = settings.curseforge_api_key
         self.base_url = "https://api.curseforge.com"
-        self.headers = {"X-Api-Key": curse_api_key} if curse_api_key else {}
-    
-    def resolve_curseforge_url(self, url: str) -> Optional[CurseForgeMod]:
-        """Extract project ID from CurseForge URL"""
+        self.game_id = settings.minecraft_game_id
+        self.server_mods_path = Path(settings.server_path) / "mods"
+        self._headers = {
+            "Accept": "application/json",
+            "x-api-key": self.api_key,
+        }
+
+    # ── CurseForge API ───────────────────────────────────────────────
+
+    async def resolve_curseforge_url(self, url: str) -> Optional[CurseForgeModInfo]:
+        """Resolve a CurseForge URL to mod info.
+
+        Supports URLs like:
+            https://www.curseforge.com/minecraft/mc-mods/sodium
+            https://www.curseforge.com/minecraft/mc-mods/sodium/files
+        """
+        slug = self._extract_slug(url)
+        if not slug:
+            return None
+        return await self.search_by_slug(slug)
+
+    def _extract_slug(self, url: str) -> Optional[str]:
+        url = url.strip().rstrip("/")
         try:
-            # Example: https://www.curseforge.com/minecraft/mc-mods/modname
-            if "curseforge.com/minecraft" in url:
-                parts = url.strip("/").split("/")
-                project_id = parts[-1] if parts else None
-                if project_id and project_id.isdigit():
-                    return self.get_curseforge_project(int(project_id))
-        except Exception:
+            if "curseforge.com/minecraft" not in url:
+                return None
+            parts = url.split("/")
+            mc_mods_idx = parts.index("mc-mods")
+            if mc_mods_idx + 1 < len(parts):
+                return parts[mc_mods_idx + 1]
+        except (ValueError, IndexError):
             pass
         return None
-    
-    def get_curseforge_project(self, project_id: int) -> Optional[CurseForgeMod]:
-        """Fetch project info from CurseForge API"""
-        try:
-            response = requests.get(
+
+    async def search_by_slug(self, slug: str) -> Optional[CurseForgeModInfo]:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self.base_url}/v1/mods/search",
+                headers=self._headers,
+                params={
+                    "gameId": self.game_id,
+                    "slug": slug,
+                    "pageSize": 1,
+                },
+            )
+            if resp.status_code != 200:
+                logger.error("CurseForge search failed: %s", resp.text)
+                return None
+
+            data = resp.json().get("data", [])
+            if not data:
+                return None
+            return self._parse_mod(data[0])
+
+    async def get_project(self, project_id: int) -> Optional[CurseForgeModInfo]:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
                 f"{self.base_url}/v1/mods/{project_id}",
-                headers=self.headers
+                headers=self._headers,
             )
-            if response.status_code == 200:
-                data = response.json()
-                project = data.get("data", {})
-                return CurseForgeMod(
-                    id=project.get("id"),
-                    name=project.get("name"),
-                    latest_file_id=project.get("latestFiles", [{}])[0].get("id") if project.get("latestFiles") else None,
-                    latest_file_name=project.get("latestFiles", [{}])[0].get("fileName") if project.get("latestFiles") else None,
-                    latest_file_url=project.get("latestFiles", [{}])[0].get("downloadUrl") if project.get("latestFiles") else None,
-                    latest_file_date=project.get("latestFiles", [{}])[0].get("fileDate") if project.get("latestFiles") else None,
-                    download_count=project.get("downloadCount", 0)
-                )
-        except Exception:
-            pass
+            if resp.status_code != 200:
+                return None
+            project = resp.json().get("data")
+            if not project:
+                return None
+            return self._parse_mod(project)
+
+    async def check_for_update(
+        self, project_id: int, current_file_id: int
+    ) -> Optional[CurseForgeModInfo]:
+        """Check if a newer file exists for this project."""
+        info = await self.get_project(project_id)
+        if not info or not info.latest_file_id:
+            return None
+        if info.latest_file_id != current_file_id:
+            return info
         return None
-    
-    def get_curseforge_files(self, project_id: int) -> List[Dict]:
-        """Get all files for a CurseForge project"""
-        try:
-            response = requests.get(
-                f"{self.base_url}/v1/mods/{project_id}/files",
-                headers=self.headers
+
+    async def download_mod_file(
+        self, project_id: int, file_id: int, dest_dir: Path
+    ) -> Optional[Path]:
+        """Download a mod file from CurseForge."""
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # Get file info for download URL
+            resp = await client.get(
+                f"{self.base_url}/v1/mods/{project_id}/files/{file_id}",
+                headers=self._headers,
             )
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("data", [])
-        except Exception:
-            pass
-        return []
-    
-    def calculate_file_hash(self, file_path: str) -> str:
-        """Calculate SHA256 hash of a file"""
-        sha256_hash = hashlib.sha256()
+            if resp.status_code != 200:
+                return None
+
+            file_data = resp.json().get("data", {})
+            download_url = file_data.get("downloadUrl")
+            file_name = file_data.get("fileName")
+
+            if not download_url or not file_name:
+                # Some mods require distribution through 3rd party
+                logger.warning(
+                    "No direct download URL for project %d file %d",
+                    project_id,
+                    file_id,
+                )
+                return None
+
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / file_name
+
+            dl_resp = await client.get(download_url)
+            if dl_resp.status_code != 200:
+                return None
+
+            dest_path.write_bytes(dl_resp.content)
+            return dest_path
+
+    def _parse_mod(self, data: dict) -> CurseForgeModInfo:
+        latest_files = data.get("latestFiles", [])
+        latest = latest_files[0] if latest_files else {}
+        authors = data.get("authors", [])
+        logo = data.get("logo", {})
+        return CurseForgeModInfo(
+            project_id=data["id"],
+            name=data["name"],
+            slug=data.get("slug", ""),
+            summary=data.get("summary", ""),
+            author=authors[0]["name"] if authors else "Unknown",
+            logo_url=logo.get("url") if logo else None,
+            latest_file_id=latest.get("id"),
+            latest_file_name=latest.get("fileName"),
+            latest_file_date=latest.get("fileDate"),
+            download_count=data.get("downloadCount", 0),
+        )
+
+    # ── DB Operations ────────────────────────────────────────────────
+
+    def add_mod_from_curseforge(
+        self,
+        db: Session,
+        info: CurseForgeModInfo,
+        user: User,
+        source_url: str,
+        force: bool = False,
+    ) -> Mod:
+        """Create a Mod record from CurseForge data.
+
+        If user is admin and force=True, mod goes directly to active.
+        Otherwise it goes to pending_vote.
+        """
+        existing = (
+            db.query(Mod)
+            .filter(Mod.curse_project_id == info.project_id)
+            .first()
+        )
+        if existing and existing.status != ModStatus.REMOVED:
+            raise ValueError(f"Mod '{info.name}' is already tracked")
+
+        status = ModStatus.ACTIVE if (force and user.role == UserRole.ADMIN) else ModStatus.PENDING_VOTE
+
+        mod = Mod(
+            name=info.name,
+            slug=info.slug,
+            description=info.summary,
+            author=info.author,
+            source=ModSource.CURSEFORGE,
+            source_url=source_url,
+            curse_project_id=info.project_id,
+            curse_file_id=info.latest_file_id,
+            current_version=info.latest_file_name,
+            file_name=info.latest_file_name,
+            download_count=info.download_count,
+            status=status,
+            added_by_id=user.id,
+        )
+        db.add(mod)
+
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="mod_added" if status == ModStatus.ACTIVE else "mod_proposed",
+                details=f"{info.name} from CurseForge (force={force})",
+                source=EventSource.WEB,
+            )
+        )
+        db.commit()
+        db.refresh(mod)
+        return mod
+
+    def add_mod_from_upload(
+        self,
+        db: Session,
+        name: str,
+        file_path: str,
+        file_hash: str,
+        user: User,
+    ) -> Mod:
+        """Create a Mod record from a custom upload."""
+        mod = Mod(
+            name=name,
+            source=ModSource.UPLOAD,
+            file_path=file_path,
+            file_hash=file_hash,
+            file_name=Path(file_path).name,
+            status=ModStatus.PENDING_APPROVAL,
+            added_by_id=user.id,
+        )
+        db.add(mod)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="mod_uploaded",
+                details=f"Custom upload: {name}",
+                source=EventSource.WEB,
+            )
+        )
+        db.commit()
+        db.refresh(mod)
+        return mod
+
+    def remove_mod(self, db: Session, mod: Mod, user: User) -> None:
+        mod.status = ModStatus.REMOVED
+        mod.updated_at = datetime.now(timezone.utc)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="mod_removed",
+                details=f"Removed mod: {mod.name}",
+                source=EventSource.WEB,
+            )
+        )
+        db.commit()
+
+    def activate_mod(self, db: Session, mod: Mod) -> None:
+        mod.status = ModStatus.ACTIVE
+        mod.updated_at = datetime.now(timezone.utc)
+        db.commit()
+
+    def get_active_mods(self, db: Session) -> list[Mod]:
+        return db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).all()
+
+    def get_curseforge_mods(self, db: Session) -> list[Mod]:
+        return (
+            db.query(Mod)
+            .filter(
+                Mod.source == ModSource.CURSEFORGE,
+                Mod.status == ModStatus.ACTIVE,
+                Mod.curse_project_id.isnot(None),
+            )
+            .all()
+        )
+
+    # ── File Utilities ───────────────────────────────────────────────
+
+    @staticmethod
+    def calculate_file_hash(file_path: str | Path) -> str:
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+    @staticmethod
+    def validate_jar(file_path: str | Path) -> bool:
+        path = Path(file_path)
+        if path.suffix.lower() != ".jar":
+            return False
         try:
-            with open(file_path, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    sha256_hash.update(chunk)
-            return sha256_hash.hexdigest()
-        except Exception:
-            return ""
-    
-    def validate_jar(self, file_path: str) -> bool:
-        """Basic JAR validation"""
-        try:
-            if not file_path.endswith(".jar"):
-                return False
-            
-            # Check if it's a valid ZIP file (JARs are ZIPs)
-            import zipfile
-            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                # Try to read the manifest
-                zip_ref.read('META-INF/MANIFEST.MF')
-            return True
-        except Exception:
+            with zipfile.ZipFile(path, "r") as zf:
+                names = zf.namelist()
+                return any(
+                    n.endswith(".class") or n == "META-INF/MANIFEST.MF" for n in names
+                )
+        except (zipfile.BadZipFile, Exception):
             return False
