@@ -128,6 +128,24 @@ export function listPendingUploads(): Promise<Upload[]> {
   return request<Upload[]>("/uploads");
 }
 
+export function downloadUpload(id: number, filename: string): void {
+  const token = getToken();
+  const url = `${BASE}/uploads/${id}/download`;
+  const a = document.createElement("a");
+  // Use fetch to include auth header, then trigger download
+  fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    .then((res) => {
+      if (!res.ok) throw new Error("Download failed");
+      return res.blob();
+    })
+    .then((blob) => {
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+}
+
 export function approveUpload(id: number, mod_name: string): Promise<Upload> {
   return request<Upload>(`/uploads/${id}/approve`, {
     method: "POST",

@@ -8,6 +8,7 @@ import {
   listPendingUploads,
   approveUpload,
   rejectUpload,
+  downloadUpload,
 } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { useSSE } from "../hooks/useSSE";
@@ -152,9 +153,15 @@ function PendingUploads() {
                 </span>
               </div>
               <p className="font-mono text-[10px] text-white/20 mb-2">
-                Scan: {u.scan_result ?? u.status} | {new Date(u.created_at).toLocaleDateString()}
+                {u.status} | {new Date(u.created_at).toLocaleDateString()}
               </p>
               <div className="flex gap-2">
+                <button
+                  onClick={() => downloadUpload(u.id, u.original_filename)}
+                  className="flex-1 rounded bg-blue-500/20 py-1 font-mono text-xs text-blue-300 transition hover:bg-blue-500/30"
+                >
+                  Download
+                </button>
                 <button
                   onClick={() => handleApprove(u.id)}
                   disabled={acting === u.id}

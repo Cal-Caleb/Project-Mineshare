@@ -27,6 +27,7 @@ from core.mod_manager import ModManager
 from core.server_manager import ServerManager
 from core.vote_manager import VoteManager
 from core.whitelist_manager import WhitelistManager
+from models import ModSource
 
 logger = logging.getLogger(__name__)
 
@@ -108,54 +109,75 @@ async def run_update_cycle() -> None:
             except Exception:
                 logger.exception("Failed to check update for %s", mod.name)
 
-        # 4. Download updated mods to staging
-        staging_dir = None
+        # 4. Build staging directory from all active mods
+        staging_dir = Path(tempfile.mkdtemp(prefix="mineshare_staging_"))
+        server_mods_dir = Path(settings.server_path) / "mods"
         has_changes = bool(updates_found)
 
-        if has_changes:
-            staging_dir = Path(tempfile.mkdtemp(prefix="mineshare_staging_"))
+        # Download and update CurseForge mods
+        for mod, info in updates_found:
+            try:
+                # Download new file
+                new_file = await mod_mgr.download_mod_file(
+                    info.project_id, info.latest_file_id, staging_dir
+                )
+                if new_file:
+                    old_file_name = mod.file_name
+                    mod.curse_file_id = info.latest_file_id
+                    mod.current_version = info.latest_file_name
+                    mod.file_name = info.latest_file_name
+                    mod.file_hash = ModManager.calculate_file_hash(new_file)
+                    db.commit()
 
-            # Copy current active mods to staging
-            current_mods = Path(settings.server_path) / "mods"
-            if current_mods.exists():
-                for f in current_mods.iterdir():
-                    if f.is_file():
-                        shutil.copy2(f, staging_dir / f.name)
-
-            # Download and replace updated mods
-            for mod, info in updates_found:
-                try:
-                    # Remove old file from staging
-                    if mod.file_name:
-                        old_file = staging_dir / mod.file_name
-                        if old_file.exists():
-                            old_file.unlink()
-
-                    # Download new file
-                    new_file = await mod_mgr.download_mod_file(
-                        info.project_id, info.latest_file_id, staging_dir
+                    await bus.publish(
+                        CHANNEL_MOD_UPDATED,
+                        {
+                            "mod_id": mod.id,
+                            "name": mod.name,
+                            "old_version": old_file_name,
+                            "new_version": info.latest_file_name,
+                        },
                     )
-                    if new_file:
-                        mod.curse_file_id = info.latest_file_id
-                        mod.current_version = info.latest_file_name
-                        mod.file_name = info.latest_file_name
-                        mod.file_hash = ModManager.calculate_file_hash(new_file)
-                        db.commit()
+            except Exception:
+                logger.exception("Failed to download update for %s", mod.name)
 
-                        await bus.publish(
-                            CHANNEL_MOD_UPDATED,
-                            {
-                                "mod_id": mod.id,
-                                "name": mod.name,
-                                "old_version": mod.file_name,
-                                "new_version": info.latest_file_name,
-                            },
-                        )
-                except Exception:
-                    logger.exception("Failed to download update for %s", mod.name)
+        # Collect all active mods into staging
+        all_active = mod_mgr.get_active_mods(db)
+        staged_files = {f.name for f in staging_dir.iterdir() if f.is_file()}
+
+        for mod in all_active:
+            # Skip CurseForge mods that were just downloaded to staging
+            if mod.file_name and mod.file_name in staged_files:
+                continue
+
+            if mod.source == ModSource.UPLOAD and mod.file_path:
+                # Copy uploaded mod from uploads dir
+                src = Path(mod.file_path)
+                if src.exists() and mod.file_name:
+                    dest = staging_dir / mod.file_name
+                    if not dest.exists():
+                        shutil.copy2(src, dest)
+                        logger.debug("Staged uploaded mod: %s", mod.file_name)
+            elif mod.source == ModSource.CURSEFORGE and mod.file_name:
+                # Copy existing CurseForge mod from server if not updated
+                src = server_mods_dir / mod.file_name
+                if src.exists():
+                    dest = staging_dir / mod.file_name
+                    if not dest.exists():
+                        shutil.copy2(src, dest)
+
+        # Check if staging differs from current server mods
+        if not has_changes:
+            current_files = {
+                f.name for f in server_mods_dir.iterdir() if f.is_file()
+            } if server_mods_dir.exists() else set()
+            if staged_files != current_files or staged_files != {
+                f.name for f in staging_dir.iterdir() if f.is_file()
+            }:
+                has_changes = True
 
         # 5. Run server update loop if changes exist
-        if has_changes and staging_dir:
+        if has_changes:
             await bus.publish(
                 CHANNEL_SERVER_UPDATE,
                 {"status": "starting", "updates": len(updates_found)},
@@ -174,11 +196,11 @@ async def run_update_cycle() -> None:
                     "updates": len(updates_found),
                 },
             )
-
-            # Cleanup staging
-            shutil.rmtree(staging_dir, ignore_errors=True)
         else:
             logger.info("No mod updates found this cycle")
+
+        # Cleanup staging
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
         logger.info("=== Update cycle completed ===")
 

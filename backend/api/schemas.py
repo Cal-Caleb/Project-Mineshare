@@ -89,7 +89,6 @@ class VoteTally(BaseModel):
     yes: int
     no: int
     total: int
-    quorum: int
 
 
 class BallotOut(BaseModel):

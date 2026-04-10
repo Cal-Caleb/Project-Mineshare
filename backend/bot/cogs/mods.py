@@ -82,7 +82,7 @@ class ModsCog(commands.Cog):
                 embed.add_field(name="Expires", value=f"<t:{int(vote.expires_at.timestamp())}:R>")
                 if info.logo_url:
                     embed.set_thumbnail(url=info.logo_url)
-                embed.set_footer(text=f"Vote ID: {vote.id} | Quorum: {vote_mgr.quorum}")
+                embed.set_footer(text=f"Vote ID: {vote.id} | Simple majority wins")
 
                 msg = await interaction.followup.send(
                     embed=embed,
@@ -152,7 +152,7 @@ class ModsCog(commands.Cog):
                 color=discord.Color.red(),
             )
             embed.add_field(name="Expires", value=f"<t:{int(vote.expires_at.timestamp())}:R>")
-            embed.set_footer(text=f"Vote ID: {vote.id} | Quorum: {vote_mgr.quorum}")
+            embed.set_footer(text=f"Vote ID: {vote.id} | Simple majority wins")
 
             msg = await interaction.followup.send(embed=embed, view=VoteView(vote.id), wait=True)
             vote.discord_message_id = str(msg.id)

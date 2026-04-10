@@ -55,7 +55,6 @@ export interface VoteTally {
   yes: number;
   no: number;
   total: number;
-  quorum: number;
 }
 
 export interface Ballot {

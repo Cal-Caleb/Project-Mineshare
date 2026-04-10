@@ -101,10 +101,10 @@ function VoteCard({
   const [acting, setActing] = useState(false);
 
   const isPending = vote.status === "pending";
-  const tally = vote.tally ?? { yes: 0, no: 0, total: 0, quorum: 3 };
+  const tally = vote.tally ?? { yes: 0, no: 0, total: 0 };
   const total = tally.yes + tally.no || 1;
   const yesPct = (tally.yes / total) * 100;
-  const alreadyVoted = vote.ballots.some((b) => b.user.id === user?.id);
+  const myBallot = vote.ballots.find((b) => b.user.id === user?.id);
 
   const timeLeft = isPending
     ? getTimeLeft(vote.expires_at)
@@ -198,7 +198,7 @@ function VoteCard({
           />
         </div>
         <p className="mt-1 font-mono text-[10px] text-white/20">
-          Quorum: {tally.quorum} votes needed
+          {tally.total} {tally.total === 1 ? "vote" : "votes"} cast
         </p>
       </div>
 
@@ -230,29 +230,28 @@ function VoteCard({
       {/* Actions */}
       {isPending && !readonly && (
         <div className="flex flex-wrap gap-2 mt-4">
-          {!alreadyVoted && (
-            <>
-              <button
-                onClick={() => handleVote(true)}
-                disabled={acting}
-                className="flex-1 rounded-lg bg-emerald-500/20 py-1.5 font-mono text-xs text-emerald-300 transition hover:bg-emerald-500/30 disabled:opacity-40"
-              >
-                Vote Yes
-              </button>
-              <button
-                onClick={() => handleVote(false)}
-                disabled={acting}
-                className="flex-1 rounded-lg bg-red-500/20 py-1.5 font-mono text-xs text-red-300 transition hover:bg-red-500/30 disabled:opacity-40"
-              >
-                Vote No
-              </button>
-            </>
-          )}
-          {alreadyVoted && (
-            <p className="w-full text-center font-mono text-xs text-white/20">
-              You already voted
-            </p>
-          )}
+          <button
+            onClick={() => handleVote(true)}
+            disabled={acting || myBallot?.in_favor === true}
+            className={`flex-1 rounded-lg py-1.5 font-mono text-xs transition disabled:opacity-40 ${
+              myBallot?.in_favor === true
+                ? "bg-emerald-500/40 text-emerald-200 ring-1 ring-emerald-400/50"
+                : "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+            }`}
+          >
+            {myBallot?.in_favor === true ? "Voted Yes" : "Vote Yes"}
+          </button>
+          <button
+            onClick={() => handleVote(false)}
+            disabled={acting || myBallot?.in_favor === false}
+            className={`flex-1 rounded-lg py-1.5 font-mono text-xs transition disabled:opacity-40 ${
+              myBallot?.in_favor === false
+                ? "bg-red-500/40 text-red-200 ring-1 ring-red-400/50"
+                : "bg-red-500/20 text-red-300 hover:bg-red-500/30"
+            }`}
+          >
+            {myBallot?.in_favor === false ? "Voted No" : "Vote No"}
+          </button>
           {isAdmin && (
             <>
               <button

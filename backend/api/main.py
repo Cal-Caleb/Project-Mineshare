@@ -8,8 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import audit, auth, mods, server, sse, uploads, users, votes
 from core.config import get_settings
+from core.database import Base, engine
 from core.events import get_event_bus
 from core.scheduler import start_scheduler, stop_scheduler
+import models  # noqa: F401 — register all models with Base
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +23,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting MineShare API...")
+    Base.metadata.create_all(bind=engine)
     start_scheduler()
     yield
     logger.info("Shutting down MineShare API...")

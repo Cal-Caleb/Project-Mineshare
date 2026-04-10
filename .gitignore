@@ -31,5 +31,10 @@ Thumbs.db
 uploads/
 quarantine/
 
+# Minecraft Server Itself
+backend/opt/minecraft
+
 # Backups
 backups/
+backend/.env
+backend/.env

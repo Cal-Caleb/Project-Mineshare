@@ -78,7 +78,7 @@ class VoteView(discord.ui.View):
             label = "Yes" if in_favor else "No"
             await interaction.response.send_message(
                 f"**{interaction.user.display_name}** voted **{label}**! "
-                f"(Yes: {tally['yes']} / No: {tally['no']} / Quorum: {tally['quorum']})",
+                f"(Yes: {tally['yes']} / No: {tally['no']})",
             )
 
             # Update the embed if vote resolved

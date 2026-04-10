@@ -26,7 +26,6 @@ class VoteManager:
     def __init__(self):
         settings = get_settings()
         self.duration_hours = settings.vote_duration_hours
-        self.quorum = settings.vote_quorum
 
     # ── Create ───────────────────────────────────────────────────────
 
@@ -92,7 +91,8 @@ class VoteManager:
         if vote.status != VoteStatus.PENDING:
             raise ValueError("This vote is no longer active")
 
-        if datetime.now(timezone.utc) > vote.expires_at:
+        expires_at = vote.expires_at.replace(tzinfo=timezone.utc) if vote.expires_at.tzinfo is None else vote.expires_at
+        if datetime.now(timezone.utc) > expires_at:
             self._expire_vote(db, vote)
             raise ValueError("This vote has expired")
 
@@ -103,7 +103,21 @@ class VoteManager:
             .first()
         )
         if existing:
-            raise ValueError("You have already voted")
+            if existing.in_favor == in_favor:
+                raise ValueError("You have already voted this way")
+            existing.in_favor = in_favor
+            existing.cast_at = datetime.now(timezone.utc)
+            db.add(
+                AuditLog(
+                    user_id=user.id,
+                    action="vote_changed",
+                    details=f"Changed to {'Yes' if in_favor else 'No'} on '{vote.mod.name}'",
+                    source=source,
+                )
+            )
+            db.commit()
+            db.refresh(existing)
+            return existing
 
         ballot = VoteBallot(
             vote_id=vote.id,
@@ -119,10 +133,6 @@ class VoteManager:
                 source=source,
             )
         )
-        db.flush()
-
-        # Evaluate after casting
-        self._evaluate(db, vote)
         db.commit()
         db.refresh(ballot)
         return ballot
@@ -144,6 +154,7 @@ class VoteManager:
         vote.status = VoteStatus.VETOED
         vote.resolved_at = datetime.now(timezone.utc)
         vote.resolved_by_id = admin.id
+        self._apply_rejection(db, vote)
 
         db.add(
             AuditLog(
@@ -218,7 +229,7 @@ class VoteManager:
             .filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(False))
             .scalar()
         )
-        return {"yes": yes, "no": no, "total": yes + no, "quorum": self.quorum}
+        return {"yes": yes, "no": no, "total": yes + no}
 
     def get_active_votes(self, db: Session) -> list[Vote]:
         self.expire_stale_votes(db)
@@ -226,29 +237,16 @@ class VoteManager:
 
     # ── Internal ─────────────────────────────────────────────────────
 
-    def _evaluate(self, db: Session, vote: Vote) -> None:
-        """Check if a vote has reached quorum + majority."""
-        tally = self.get_tally(db, vote)
-        if tally["total"] < self.quorum:
-            return
-
-        if tally["yes"] > tally["no"]:
-            vote.status = VoteStatus.APPROVED
-            vote.resolved_at = datetime.now(timezone.utc)
-            self._apply_result(db, vote)
-        elif tally["no"] > tally["yes"]:
-            vote.status = VoteStatus.REJECTED
-            vote.resolved_at = datetime.now(timezone.utc)
-        # Tie: stay pending until more votes or expiry
 
     def _expire_vote(self, db: Session, vote: Vote) -> None:
-        # On expiry, evaluate with what we have (even below quorum)
+        # On expiry: strict majority approves, otherwise rejected (ties = rejected)
         tally = self.get_tally(db, vote)
-        if tally["yes"] > tally["no"] and tally["total"] > 0:
+        if tally["total"] > 0 and tally["yes"] > tally["no"]:
             vote.status = VoteStatus.APPROVED
             self._apply_result(db, vote)
         else:
-            vote.status = VoteStatus.EXPIRED
+            vote.status = VoteStatus.REJECTED
+            self._apply_rejection(db, vote)
         vote.resolved_at = datetime.now(timezone.utc)
 
     def _apply_result(self, db: Session, vote: Vote) -> None:
@@ -258,3 +256,10 @@ class VoteManager:
             mod.status = ModStatus.ACTIVE
         elif vote.vote_type == VoteType.REMOVE:
             mod.status = ModStatus.REMOVED
+
+    def _apply_rejection(self, db: Session, vote: Vote) -> None:
+        """Apply the outcome of a failed/vetoed vote to the mod."""
+        mod = vote.mod
+        if vote.vote_type == VoteType.ADD:
+            mod.status = ModStatus.REMOVED
+        # For removal votes that fail, mod stays ACTIVE (no change needed)

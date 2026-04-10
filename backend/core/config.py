@@ -35,10 +35,6 @@ class Settings(BaseSettings):
     minecraft_game_id: int = 432
     neoforge_loader_type: int = 6  # NeoForge modloader type for CF API
 
-    # ClamAV
-    clamav_host: str = "localhost"
-    clamav_port: int = 3310
-
     # Uploads
     upload_dir: str = "/opt/minecraft/uploads"
     quarantine_dir: str = "/opt/minecraft/quarantine"

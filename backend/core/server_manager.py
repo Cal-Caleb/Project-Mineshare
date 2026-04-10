@@ -1,6 +1,8 @@
 import logging
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import tarfile
 import time
@@ -38,30 +40,49 @@ class ServerManager:
     # ── RCON ─────────────────────────────────────────────────────────
 
     def rcon_command(self, command: str) -> str:
-        """Send a command to the Minecraft server via mcrcon."""
+        """Send a command to the Minecraft server via RCON protocol."""
         try:
-            result = subprocess.run(
-                [
-                    "mcrcon",
-                    "-H", self.rcon_host,
-                    "-P", str(self.rcon_port),
-                    "-p", self.rcon_password,
-                    "-c", command,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return result.stdout.strip()
-        except FileNotFoundError:
-            logger.error("mcrcon not found on PATH")
-            return ""
-        except subprocess.TimeoutExpired:
-            logger.error("RCON command timed out: %s", command)
+            return self._rcon_send(command)
+        except (ConnectionRefusedError, ConnectionError, OSError):
+            logger.debug("RCON unavailable (server likely offline): %s", command)
             return ""
         except Exception:
             logger.exception("RCON command failed: %s", command)
             return ""
+
+    def _rcon_send(self, command: str) -> str:
+        """Pure-Python Minecraft RCON client."""
+        SERVERDATA_AUTH = 3
+        SERVERDATA_EXECCOMMAND = 2
+
+        def _pack(req_id: int, req_type: int, payload: str) -> bytes:
+            data = struct.pack("<ii", req_id, req_type) + payload.encode("utf-8") + b"\x00\x00"
+            return struct.pack("<i", len(data)) + data
+
+        def _unpack(sock: socket.socket) -> tuple[int, int, str]:
+            raw_len = sock.recv(4)
+            if len(raw_len) < 4:
+                raise ConnectionError("RCON connection closed")
+            length = struct.unpack("<i", raw_len)[0]
+            data = b""
+            while len(data) < length:
+                data += sock.recv(length - len(data))
+            req_id, req_type = struct.unpack("<ii", data[:8])
+            body = data[8:-2].decode("utf-8")
+            return req_id, req_type, body
+
+        with socket.create_connection((self.rcon_host, self.rcon_port), timeout=10) as sock:
+            # Authenticate
+            sock.sendall(_pack(1, SERVERDATA_AUTH, self.rcon_password))
+            auth_id, _, _ = _unpack(sock)
+            if auth_id == -1:
+                logger.error("RCON authentication failed")
+                return ""
+
+            # Send command
+            sock.sendall(_pack(2, SERVERDATA_EXECCOMMAND, command))
+            _, _, body = _unpack(sock)
+            return body.strip()
 
     def announce(self, message: str) -> None:
         self.rcon_command(f'say [MineShare] {message}')
@@ -186,6 +207,11 @@ class ServerManager:
     # ── Server Control ───────────────────────────────────────────────
 
     def restart_server(self, db: Session | None = None, triggered_by_id: int | None = None) -> bool:
+        """Restart the server by sending RCON 'stop'.
+
+        The host systemd service should be configured with Restart=always
+        so the server comes back up automatically after stop.
+        """
         event = None
         if db:
             event = ServerEvent(
@@ -197,14 +223,11 @@ class ServerManager:
             db.commit()
 
         try:
-            subprocess.run(
-                ["systemctl", "restart", self.systemd_unit],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            logger.info("Server restart command sent")
+            self.rcon_command("stop")
+            logger.info("Server stop command sent via RCON (systemd will restart)")
+            # Wait for server to come back
+            if not self.health_check():
+                raise RuntimeError("Server did not come back after restart")
             if event and db:
                 event.status = ServerEventStatus.SUCCESS
                 event.completed_at = datetime.now(timezone.utc)
@@ -219,28 +242,15 @@ class ServerManager:
             return False
 
     def health_check(self, timeout: int = 120) -> bool:
-        """Wait for server to report 'Done' in journal logs."""
+        """Wait for the server to accept RCON connections again."""
         start = time.time()
         logger.info("Running health check (timeout=%ds)...", timeout)
+        # Wait a few seconds for the server to actually stop first
+        time.sleep(10)
         while time.time() - start < timeout:
             try:
-                result = subprocess.run(
-                    ["systemctl", "is-active", self.systemd_unit],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.stdout.strip() != "active":
-                    time.sleep(5)
-                    continue
-
-                logs = subprocess.run(
-                    ["journalctl", "-u", self.systemd_unit, "-n", "20", "--no-pager"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if "Done" in logs.stdout:
+                resp = self.rcon_command("list")
+                if resp:
                     logger.info("Health check passed")
                     return True
             except Exception:
@@ -252,13 +262,8 @@ class ServerManager:
 
     def is_server_running(self) -> bool:
         try:
-            result = subprocess.run(
-                ["systemctl", "is-active", self.systemd_unit],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return result.stdout.strip() == "active"
+            resp = self.rcon_command("list")
+            return bool(resp)
         except Exception:
             return False
 

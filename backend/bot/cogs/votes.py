@@ -38,8 +38,7 @@ class VotesCog(commands.Cog):
                 embed.add_field(
                     name=f"{vote.vote_type.value.upper()}: {vote.mod.name}",
                     value=(
-                        f"Yes: {tally['yes']} / No: {tally['no']} "
-                        f"(need {tally['quorum']})\n"
+                        f"Yes: {tally['yes']} / No: {tally['no']}\n"
                         f"Expires <t:{int(vote.expires_at.timestamp())}:R>"
                     ),
                     inline=False,
@@ -84,7 +83,7 @@ class VotesCog(commands.Cog):
             embed.add_field(name="Status", value=vote.status.value)
             embed.add_field(name="Yes", value=str(tally["yes"]))
             embed.add_field(name="No", value=str(tally["no"]))
-            embed.add_field(name="Quorum", value=str(tally["quorum"]))
+            embed.add_field(name="Total", value=str(tally["total"]))
 
             if vote.status == VoteStatus.PENDING:
                 embed.add_field(

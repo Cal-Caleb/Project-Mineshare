@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.deps import (
@@ -30,9 +31,6 @@ async def upload_mod_jar(
         upload = await mgr.handle_upload(db, content, file.filename or "mod.jar", user)
     except ValueError as e:
         raise HTTPException(400, str(e))
-
-    # Attempt immediate scan
-    mgr.scan_file(db, upload)
 
     bus = get_event_bus()
     await bus.publish(
@@ -118,6 +116,29 @@ async def reject_upload(
     )
 
     return _upload_to_out(upload)
+
+
+@router.get("/{upload_id}/download")
+async def download_upload(
+    upload_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+    mgr: UploadManager = Depends(get_upload_manager),
+):
+    """Admin-only: download the uploaded file for manual review."""
+    upload = db.query(ModUpload).filter(ModUpload.id == upload_id).first()
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+
+    file_path = mgr.get_upload_file_path(upload)
+    if not file_path:
+        raise HTTPException(404, "File no longer available")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=upload.original_filename,
+        media_type="application/java-archive",
+    )
 
 
 def _upload_to_out(upload: ModUpload) -> UploadOut:

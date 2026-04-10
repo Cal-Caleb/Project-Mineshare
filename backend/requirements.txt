@@ -27,8 +27,5 @@ apscheduler==3.10.4
 # Discord bot
 discord.py==2.4.0
 
-# Virus scanning
-pyclamd==0.4.0
-
 # Compression
 zstandard==0.23.0

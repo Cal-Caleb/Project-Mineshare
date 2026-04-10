@@ -28,15 +28,10 @@ async def get_server_status(
 
 @router.post("/update")
 async def trigger_manual_update(
-    background_tasks: BackgroundTasks,
     _admin: User = Depends(require_admin),
 ):
     """Trigger a manual update cycle (admin only)."""
-
-    async def _run():
-        await run_update_cycle()
-
-    background_tasks.add_task(asyncio.ensure_future, _run())
+    asyncio.create_task(run_update_cycle())
     return {"status": "started", "message": "Update cycle queued"}
 
 

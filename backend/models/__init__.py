@@ -57,10 +57,6 @@ class VoteStatus(str, enum.Enum):
 
 
 class UploadStatus(str, enum.Enum):
-    PENDING_SCAN = "pending_scan"
-    SCANNING = "scanning"
-    CLEAN = "clean"
-    INFECTED = "infected"
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -229,7 +225,7 @@ class ModUpload(Base):
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     quarantine_path: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[UploadStatus] = mapped_column(
-        Enum(UploadStatus), default=UploadStatus.PENDING_SCAN, nullable=False
+        Enum(UploadStatus), default=UploadStatus.PENDING_APPROVAL, nullable=False
     )
     scan_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_by_id: Mapped[int] = mapped_column(

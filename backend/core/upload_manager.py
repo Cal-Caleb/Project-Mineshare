@@ -19,6 +19,7 @@ from models import (
     UploadStatus,
     User,
     UserRole,
+    VoteType,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,8 +31,6 @@ class UploadManager:
         self.upload_dir = Path(settings.upload_dir)
         self.quarantine_dir = Path(settings.quarantine_dir)
         self.max_size = settings.max_upload_size
-        self.clamav_host = settings.clamav_host
-        self.clamav_port = settings.clamav_port
 
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.quarantine_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +60,7 @@ class UploadManager:
             file_hash=file_hash,
             file_size=len(file_bytes),
             quarantine_path=str(quarantine_path),
-            status=UploadStatus.PENDING_SCAN,
+            status=UploadStatus.PENDING_APPROVAL,
             uploaded_by_id=user.id,
         )
         db.add(upload)
@@ -77,55 +76,10 @@ class UploadManager:
         db.refresh(upload)
         return upload
 
-    def scan_file(self, db: Session, upload: ModUpload) -> bool:
-        """Scan a quarantined file with ClamAV. Returns True if clean."""
-        upload.status = UploadStatus.SCANNING
-        db.commit()
-
-        try:
-            import pyclamd
-
-            cd = pyclamd.ClamdNetworkSocket(
-                host=self.clamav_host, port=self.clamav_port
-            )
-            if not cd.ping():
-                logger.error("ClamAV not reachable")
-                upload.scan_result = "ClamAV unreachable"
-                upload.status = UploadStatus.PENDING_SCAN
-                db.commit()
-                return False
-
-            result = cd.scan_file(upload.quarantine_path)
-
-            if result is None:
-                # Clean
-                upload.status = UploadStatus.CLEAN
-                upload.scan_result = "Clean"
-                db.commit()
-                logger.info("File clean: %s", upload.original_filename)
-                return True
-            else:
-                # Infected
-                upload.status = UploadStatus.INFECTED
-                upload.scan_result = str(result)
-                db.commit()
-                logger.warning(
-                    "File infected: %s — %s", upload.original_filename, result
-                )
-                return False
-
-        except ImportError:
-            logger.warning("pyclamd not available, marking as clean")
-            upload.status = UploadStatus.CLEAN
-            upload.scan_result = "Scan skipped (pyclamd unavailable)"
-            db.commit()
-            return True
-        except Exception:
-            logger.exception("Scan failed for %s", upload.original_filename)
-            upload.scan_result = "Scan error"
-            upload.status = UploadStatus.PENDING_SCAN
-            db.commit()
-            return False
+    def get_upload_file_path(self, upload: ModUpload) -> Path | None:
+        """Return the quarantined file path if it exists, for admin download."""
+        path = Path(upload.quarantine_path)
+        return path if path.exists() else None
 
     def approve_upload(
         self,
@@ -137,7 +91,7 @@ class UploadManager:
         """Admin approves a clean upload, creating the Mod record."""
         if admin.role != UserRole.ADMIN:
             raise PermissionError("Only admins can approve uploads")
-        if upload.status not in (UploadStatus.CLEAN, UploadStatus.PENDING_APPROVAL):
+        if upload.status != UploadStatus.PENDING_APPROVAL:
             raise ValueError(f"Upload is not approvable (status={upload.status.value})")
 
         # Move from quarantine to uploads
@@ -157,7 +111,7 @@ class UploadManager:
             file_path=str(dest),
             file_hash=upload.file_hash,
             file_name=upload.original_filename,
-            status=ModStatus.ACTIVE,
+            status=ModStatus.PENDING_VOTE,
             added_by_id=upload.uploaded_by_id,
         )
         db.add(mod)
@@ -170,6 +124,64 @@ class UploadManager:
                 user_id=admin.id,
                 action="upload_approved",
                 details=f"Approved upload: {upload.original_filename} as '{mod_name}'",
+                source=EventSource.WEB,
+            )
+        )
+        db.commit()
+        db.refresh(mod)
+
+        # Create a community vote for the uploaded mod
+        from core.vote_manager import VoteManager
+        vote_mgr = VoteManager()
+        vote_mgr.create_vote(db, mod, VoteType.ADD, admin)
+
+        return mod
+
+    def approve_mod_update(
+        self,
+        db: Session,
+        upload: ModUpload,
+        admin: User,
+    ) -> Mod:
+        """Admin approves an update upload — replaces the mod file, no vote needed."""
+        if admin.role != UserRole.ADMIN:
+            raise PermissionError("Only admins can approve uploads")
+        if upload.status != UploadStatus.PENDING_APPROVAL:
+            raise ValueError(f"Upload is not approvable (status={upload.status.value})")
+        if not upload.mod_id:
+            raise ValueError("This upload is not linked to an existing mod")
+
+        mod = db.query(Mod).filter(Mod.id == upload.mod_id).first()
+        if not mod:
+            raise ValueError("Linked mod not found")
+
+        # Remove old file
+        if mod.file_path:
+            old_path = Path(mod.file_path)
+            if old_path.exists():
+                old_path.unlink()
+
+        # Move new file from quarantine to uploads
+        dest = self.upload_dir / upload.filename
+        src = Path(upload.quarantine_path)
+        if src.exists():
+            shutil.move(str(src), str(dest))
+
+        # Update mod record
+        old_file_name = mod.file_name
+        mod.file_path = str(dest)
+        mod.file_hash = upload.file_hash
+        mod.file_name = upload.original_filename
+
+        upload.status = UploadStatus.APPROVED
+        upload.approved_by_id = admin.id
+        upload.resolved_at = datetime.now(timezone.utc)
+
+        db.add(
+            AuditLog(
+                user_id=admin.id,
+                action="mod_update_approved",
+                details=f"Approved update for '{mod.name}': {old_file_name} -> {upload.original_filename}",
                 source=EventSource.WEB,
             )
         )
@@ -206,11 +218,7 @@ class UploadManager:
     def get_pending_uploads(self, db: Session) -> list[ModUpload]:
         return (
             db.query(ModUpload)
-            .filter(
-                ModUpload.status.in_(
-                    [UploadStatus.CLEAN, UploadStatus.PENDING_APPROVAL]
-                )
-            )
+            .filter(ModUpload.status == UploadStatus.PENDING_APPROVAL)
             .order_by(ModUpload.created_at.desc())
             .all()
         )
