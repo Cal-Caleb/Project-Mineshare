@@ -34,6 +34,7 @@ class ServerManager:
         self.rcon_password = settings.rcon_password
         self.systemd_unit = settings.server_systemd_unit
         self.restart_warning_seconds = settings.restart_warning_seconds
+        self.pause_flag = self.server_path / "mineshare_pause.flag"
 
         self.backup_path.mkdir(parents=True, exist_ok=True)
 
@@ -148,20 +149,11 @@ class ServerManager:
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_name = f"backup_{stamp}"
-        tar_path = self.backup_path / f"{backup_name}.tar.zst"
+        tar_path = self.backup_path / f"{backup_name}.tar.gz"
 
         try:
-            # Create tar first
-            tmp_tar = self.backup_path / f"{backup_name}.tar"
-            with tarfile.open(tmp_tar, "w") as tar:
+            with tarfile.open(tar_path, "w:gz", compresslevel=6) as tar:
                 tar.add(world_path, arcname="world")
-
-            # Compress with zstd via CLI (widely available, fast)
-            subprocess.run(
-                ["zstd", "--rm", "-q", str(tmp_tar), "-o", str(tar_path)],
-                check=True,
-                timeout=300,
-            )
 
             logger.info("Backup created: %s", tar_path)
 
@@ -184,7 +176,7 @@ class ServerManager:
             return None
 
     def _cleanup_old_backups(self, keep: int = 10) -> None:
-        backups = sorted(self.backup_path.glob("backup_*.tar.zst"))
+        backups = sorted(self.backup_path.glob("backup_*.tar.gz"))
         for old in backups[:-keep]:
             old.unlink()
             logger.info("Removed old backup: %s", old.name)
@@ -192,13 +184,58 @@ class ServerManager:
     # ── Mod Swapping ─────────────────────────────────────────────────
 
     def swap_mods(self, staging_dir: Path) -> bool:
-        """Replace the server mods/ directory with contents of staging_dir."""
+        """Replace the server mods/ directory with contents of staging_dir.
+
+        Does an in-place sync (delete files not in staging, copy everything
+        from staging) instead of rmtree/copytree, which is more robust on
+        Windows bind mounts where file locks and permission errors are common.
+        """
         mods_path = self.server_path / "mods"
         try:
-            if mods_path.exists():
-                shutil.rmtree(mods_path)
-            shutil.copytree(staging_dir, mods_path)
-            logger.info("Mods swapped from %s", staging_dir)
+            mods_path.mkdir(parents=True, exist_ok=True)
+
+            desired = {
+                f.name: f for f in staging_dir.iterdir() if f.is_file()
+            }
+            current = {
+                f.name: f for f in mods_path.iterdir() if f.is_file()
+            }
+
+            removed = 0
+            for name, path in current.items():
+                if name not in desired:
+                    try:
+                        path.unlink()
+                        removed += 1
+                    except Exception:
+                        logger.exception("Could not remove %s", path)
+                        return False
+
+            added = 0
+            updated = 0
+            for name, src in desired.items():
+                dest = mods_path / name
+                if dest.exists():
+                    if src.stat().st_size == dest.stat().st_size:
+                        continue
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        logger.exception("Could not replace %s", dest)
+                        return False
+                    shutil.copy2(src, dest)
+                    updated += 1
+                else:
+                    shutil.copy2(src, dest)
+                    added += 1
+
+            logger.info(
+                "Mods synced: +%d / ~%d / -%d (total %d)",
+                added,
+                updated,
+                removed,
+                len(desired),
+            )
             return True
         except Exception:
             logger.exception("Failed to swap mods")
@@ -241,7 +278,25 @@ class ServerManager:
                 db.commit()
             return False
 
-    def health_check(self, timeout: int = 120) -> bool:
+    def wait_for_stop(self, timeout: int = 90) -> bool:
+        """Wait for the server to stop responding to RCON."""
+        start = time.time()
+        logger.info("Waiting for server to stop (timeout=%ds)...", timeout)
+        while time.time() - start < timeout:
+            try:
+                with socket.create_connection(
+                    (self.rcon_host, self.rcon_port), timeout=2
+                ):
+                    pass
+                # RCON port still open — still running
+            except (ConnectionRefusedError, OSError):
+                logger.info("Server confirmed stopped")
+                return True
+            time.sleep(2)
+        logger.error("Server did not stop within %ds", timeout)
+        return False
+
+    def health_check(self, timeout: int = 180) -> bool:
         """Wait for the server to accept RCON connections again."""
         start = time.time()
         logger.info("Running health check (timeout=%ds)...", timeout)
@@ -308,33 +363,53 @@ class ServerManager:
         db.commit()
 
         try:
-            # 1. Announce
-            players = self.get_online_players()
-            warning_time = self.restart_warning_seconds if players else 5
-            self.announce(
-                f"Server restarting in {warning_time}s for mod updates!"
-            )
-            time.sleep(warning_time)
+            server_was_running = self.is_server_running()
 
-            # 2. Save
-            if not self.save_world():
-                raise RuntimeError("Failed to save world")
+            # Set pause flag so the wrapper script holds off on relaunching
+            try:
+                self.pause_flag.write_text("locked")
+                logger.info("Pause flag set at %s", self.pause_flag)
+            except Exception:
+                logger.exception("Failed to write pause flag")
 
-            # 3. Backup
+            if server_was_running:
+                # 1. Announce
+                players = self.get_online_players()
+                warning_time = self.restart_warning_seconds if players else 5
+                self.announce(
+                    f"Server restarting in {warning_time}s for mod updates!"
+                )
+                time.sleep(warning_time)
+
+                # 2. Save
+                self.save_world()
+
+                # 3. Stop the server (wrapper holds due to pause flag)
+                logger.info("Sending RCON stop for update...")
+                self.rcon_command("stop")
+                if not self.wait_for_stop(timeout=90):
+                    raise RuntimeError("Server did not stop in time")
+                # Extra grace period so file handles fully drain on Windows
+                time.sleep(3)
+
+            # 4. Swap mods FIRST so the mods dir is settled before anything else
+            if not self.swap_mods(staging_dir):
+                raise RuntimeError("Failed to swap mods")
+
+            # 5. Backup (safe — server is offline)
             backup = self.backup_world(db, triggered_by_id)
             if not backup:
                 raise RuntimeError("Failed to backup world")
 
-            # 4. Swap mods
-            if not self.swap_mods(staging_dir):
-                raise RuntimeError("Failed to swap mods")
+            # 6. Release the pause flag so wrapper can relaunch
+            try:
+                self.pause_flag.unlink(missing_ok=True)
+                logger.info("Pause flag cleared")
+            except Exception:
+                logger.exception("Failed to clear pause flag")
 
-            # 5. Restart
-            if not self.restart_server(db, triggered_by_id):
-                raise RuntimeError("Failed to restart server")
-
-            # 6. Health check
-            if not self.health_check():
+            # 7. Wait for wrapper to bring server back
+            if server_was_running and not self.health_check(timeout=240):
                 logger.error("Health check failed, consider rollback")
                 event.status = ServerEventStatus.FAILED
                 event.details = "Health check failed after restart"
@@ -363,3 +438,9 @@ class ServerManager:
             event.completed_at = datetime.now(timezone.utc)
             db.commit()
             return False
+        finally:
+            # Always clear the pause flag so the server can relaunch
+            try:
+                self.pause_flag.unlink(missing_ok=True)
+            except Exception:
+                pass

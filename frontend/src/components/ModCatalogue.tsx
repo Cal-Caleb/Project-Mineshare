@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { listMods, removeMod } from "../lib/api";
+import { listMods, removeMod, uploadModUpdate } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { useSSE } from "../hooks/useSSE";
 import type { Mod } from "../lib/types";
@@ -38,6 +38,30 @@ export default function ModCatalogue() {
       fetchMods();
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const updateInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [updatingMod, setUpdatingMod] = useState<number | null>(null);
+
+  const handleUpdateClick = (modId: number) => {
+    updateInputRefs.current[modId]?.click();
+  };
+
+  const handleUpdateFile = async (mod: Mod, file: File | null) => {
+    if (!file) return;
+    if (!confirm(`Submit update "${file.name}" for "${mod.name}"? An admin will need to approve it.`)) return;
+    setUpdatingMod(mod.id);
+    try {
+      await uploadModUpdate(mod.id, file);
+      alert("Update submitted for admin approval.");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setUpdatingMod(null);
+      if (updateInputRefs.current[mod.id]) {
+        updateInputRefs.current[mod.id]!.value = "";
+      }
     }
   };
 
@@ -129,7 +153,30 @@ export default function ModCatalogue() {
 
               {/* Actions */}
               {mod.status === "active" && user && (
-                <div className="mt-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="mt-4 flex flex-wrap gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {mod.source === "upload" &&
+                    (mod.added_by?.id === user.id || isAdmin) && (
+                      <>
+                        <input
+                          ref={(el) => {
+                            updateInputRefs.current[mod.id] = el;
+                          }}
+                          type="file"
+                          accept=".jar"
+                          className="hidden"
+                          onChange={(e) =>
+                            handleUpdateFile(mod, e.target.files?.[0] ?? null)
+                          }
+                        />
+                        <button
+                          onClick={() => handleUpdateClick(mod.id)}
+                          disabled={updatingMod === mod.id}
+                          className="flex-1 rounded border border-blue-500/20 py-1 font-mono text-xs text-blue-300 hover:bg-blue-500/10 transition disabled:opacity-40"
+                        >
+                          {updatingMod === mod.id ? "Uploading..." : "Upload Update"}
+                        </button>
+                      </>
+                    )}
                   {(mod.added_by?.id === user.id || isAdmin) && (
                     <button
                       onClick={() => handleRemove(mod, false)}

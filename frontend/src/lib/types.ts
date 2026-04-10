@@ -86,6 +86,7 @@ export interface Upload {
   file_size: number;
   status: string;
   scan_result: string | null;
+  mod_id: number | null;
   uploaded_by?: User;
   approved_by?: User;
   created_at: string;

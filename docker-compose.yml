@@ -16,10 +16,11 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app
-      - /opt/minecraft/server:/opt/minecraft/server
-      - /opt/minecraft/backups:/opt/minecraft/backups
-      - /opt/minecraft/uploads:/opt/minecraft/uploads
-      - /opt/minecraft/quarantine:/opt/minecraft/quarantine
+      - ./backend/opt/minecraft/server:/opt/minecraft/server
+      - ./backend/opt/minecraft/backups:/opt/minecraft/backups
+      - ./backend/opt/minecraft/uploads:/opt/minecraft/uploads
+      - ./backend/opt/minecraft/quarantine:/opt/minecraft/quarantine
+      - ./backend/opt/minecraft/mod_cache:/opt/minecraft/mod_cache
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
   bot:
@@ -34,10 +35,11 @@ services:
       redis:
         condition: service_started
     volumes:
-      - /opt/minecraft/server:/opt/minecraft/server
-      - /opt/minecraft/backups:/opt/minecraft/backups
-      - /opt/minecraft/uploads:/opt/minecraft/uploads
-      - /opt/minecraft/quarantine:/opt/minecraft/quarantine
+      - ./backend/opt/minecraft/server:/opt/minecraft/server
+      - ./backend/opt/minecraft/backups:/opt/minecraft/backups
+      - ./backend/opt/minecraft/uploads:/opt/minecraft/uploads
+      - ./backend/opt/minecraft/quarantine:/opt/minecraft/quarantine
+      - ./backend/opt/minecraft/mod_cache:/opt/minecraft/mod_cache
     command: python discord_bot.py
     restart: unless-stopped
 

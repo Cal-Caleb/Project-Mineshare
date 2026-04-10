@@ -46,6 +46,42 @@ async def upload_mod_jar(
     return _upload_to_out(upload)
 
 
+@router.post("/update/{mod_id}", response_model=UploadOut)
+async def upload_mod_update(
+    mod_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_mc_username),
+    mgr: UploadManager = Depends(get_upload_manager),
+):
+    """Upload an update for an existing uploaded mod. Requires admin approval (no vote)."""
+    content = await file.read()
+
+    try:
+        upload = await mgr.handle_upload(
+            db, content, file.filename or "mod.jar", user, mod_id=mod_id
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+
+    bus = get_event_bus()
+    await bus.publish(
+        CHANNEL_UPLOAD_PENDING,
+        {
+            "upload_id": upload.id,
+            "filename": upload.original_filename,
+            "user": user.discord_username,
+            "status": upload.status.value,
+            "is_update": True,
+            "mod_id": mod_id,
+        },
+    )
+
+    return _upload_to_out(upload)
+
+
 @router.get("", response_model=list[UploadOut])
 async def list_pending_uploads(
     db: Session = Depends(get_db),
@@ -69,7 +105,13 @@ async def approve_upload(
         raise HTTPException(404, "Upload not found")
 
     try:
-        mgr.approve_upload(db, upload, admin, body.mod_name)
+        if upload.mod_id is not None:
+            # Update to existing mod — no vote needed
+            mgr.approve_mod_update(db, upload, admin)
+        else:
+            if not body.mod_name:
+                raise HTTPException(400, "mod_name is required for new mod uploads")
+            mgr.approve_upload(db, upload, admin, body.mod_name)
     except (ValueError, PermissionError) as e:
         raise HTTPException(400, str(e))
 
@@ -149,6 +191,7 @@ def _upload_to_out(upload: ModUpload) -> UploadOut:
         file_size=upload.file_size,
         status=upload.status.value,
         scan_result=upload.scan_result,
+        mod_id=upload.mod_id,
         created_at=upload.created_at,
         resolved_at=upload.resolved_at,
     )

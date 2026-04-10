@@ -36,9 +36,18 @@ class UploadManager:
         self.quarantine_dir.mkdir(parents=True, exist_ok=True)
 
     async def handle_upload(
-        self, db: Session, file_bytes: bytes, original_filename: str, user: User
+        self,
+        db: Session,
+        file_bytes: bytes,
+        original_filename: str,
+        user: User,
+        mod_id: int | None = None,
     ) -> ModUpload:
-        """Accept an uploaded JAR, quarantine it, and queue for scanning."""
+        """Accept an uploaded JAR and quarantine it.
+
+        If mod_id is provided, this is treated as an update to an existing mod.
+        The uploader must be the original adder of that mod (or an admin).
+        """
         if len(file_bytes) > self.max_size:
             raise ValueError(
                 f"File too large ({len(file_bytes)} bytes, max {self.max_size})"
@@ -46,6 +55,16 @@ class UploadManager:
 
         if not original_filename.lower().endswith(".jar"):
             raise ValueError("Only .jar files are accepted")
+
+        # If this is an update, verify the user owns the mod
+        if mod_id is not None:
+            mod = db.query(Mod).filter(Mod.id == mod_id).first()
+            if not mod:
+                raise ValueError("Mod not found")
+            if mod.source != ModSource.UPLOAD:
+                raise ValueError("Only uploaded mods can be updated this way")
+            if mod.added_by_id != user.id and user.role != UserRole.ADMIN:
+                raise PermissionError("Only the original uploader can update this mod")
 
         file_hash = hashlib.sha256(file_bytes).hexdigest()
 
@@ -62,13 +81,17 @@ class UploadManager:
             quarantine_path=str(quarantine_path),
             status=UploadStatus.PENDING_APPROVAL,
             uploaded_by_id=user.id,
+            mod_id=mod_id,
         )
         db.add(upload)
         db.add(
             AuditLog(
                 user_id=user.id,
-                action="file_uploaded",
-                details=f"Uploaded {original_filename} ({len(file_bytes)} bytes)",
+                action="file_uploaded" if mod_id is None else "mod_update_uploaded",
+                details=(
+                    f"Uploaded {original_filename} ({len(file_bytes)} bytes)"
+                    + (f" as update for mod {mod_id}" if mod_id else "")
+                ),
                 source=EventSource.WEB,
             )
         )

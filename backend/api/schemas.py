@@ -119,7 +119,7 @@ class VoteOut(BaseModel):
 
 
 class ApproveUpload(BaseModel):
-    mod_name: str = Field(..., min_length=1, max_length=255)
+    mod_name: str | None = Field(None, min_length=1, max_length=255)
 
 
 class RejectUpload(BaseModel):
@@ -133,6 +133,7 @@ class UploadOut(BaseModel):
     file_size: int
     status: str
     scan_result: Optional[str] = None
+    mod_id: Optional[int] = None
     uploaded_by: Optional[UserOut] = None
     approved_by: Optional[UserOut] = None
     created_at: datetime

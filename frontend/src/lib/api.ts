@@ -124,6 +124,15 @@ export function uploadModJar(file: File): Promise<Upload> {
   });
 }
 
+export function uploadModUpdate(modId: number, file: File): Promise<Upload> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request<Upload>(`/uploads/update/${modId}`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
 export function listPendingUploads(): Promise<Upload[]> {
   return request<Upload[]>("/uploads");
 }
@@ -146,7 +155,7 @@ export function downloadUpload(id: number, filename: string): void {
     });
 }
 
-export function approveUpload(id: number, mod_name: string): Promise<Upload> {
+export function approveUpload(id: number, mod_name?: string): Promise<Upload> {
   return request<Upload>(`/uploads/${id}/approve`, {
     method: "POST",
     body: JSON.stringify({ mod_name }),

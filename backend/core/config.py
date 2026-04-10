@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # Uploads
     upload_dir: str = "/opt/minecraft/uploads"
     quarantine_dir: str = "/opt/minecraft/quarantine"
+    mod_cache_dir: str = "/opt/minecraft/mod_cache"
     max_upload_size: int = 52428800  # 50MB
 
     # Voting

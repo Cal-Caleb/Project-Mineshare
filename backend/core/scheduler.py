@@ -109,17 +109,17 @@ async def run_update_cycle() -> None:
             except Exception:
                 logger.exception("Failed to check update for %s", mod.name)
 
-        # 4. Build staging directory from all active mods
+        # 4. Build desired staging directory
         staging_dir = Path(tempfile.mkdtemp(prefix="mineshare_staging_"))
         server_mods_dir = Path(settings.server_path) / "mods"
-        has_changes = bool(updates_found)
+        cache_dir = Path(settings.mod_cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Download and update CurseForge mods
+        # Apply CurseForge updates to DB and fetch new files into cache
         for mod, info in updates_found:
             try:
-                # Download new file
                 new_file = await mod_mgr.download_mod_file(
-                    info.project_id, info.latest_file_id, staging_dir
+                    info.project_id, info.latest_file_id, cache_dir
                 )
                 if new_file:
                     old_file_name = mod.file_name
@@ -141,40 +141,75 @@ async def run_update_cycle() -> None:
             except Exception:
                 logger.exception("Failed to download update for %s", mod.name)
 
-        # Collect all active mods into staging
+        # Collect every active mod into staging
         all_active = mod_mgr.get_active_mods(db)
-        staged_files = {f.name for f in staging_dir.iterdir() if f.is_file()}
 
         for mod in all_active:
-            # Skip CurseForge mods that were just downloaded to staging
-            if mod.file_name and mod.file_name in staged_files:
+            if not mod.file_name:
+                continue
+            dest = staging_dir / mod.file_name
+            if dest.exists():
                 continue
 
             if mod.source == ModSource.UPLOAD and mod.file_path:
-                # Copy uploaded mod from uploads dir
                 src = Path(mod.file_path)
-                if src.exists() and mod.file_name:
-                    dest = staging_dir / mod.file_name
-                    if not dest.exists():
-                        shutil.copy2(src, dest)
-                        logger.debug("Staged uploaded mod: %s", mod.file_name)
-            elif mod.source == ModSource.CURSEFORGE and mod.file_name:
-                # Copy existing CurseForge mod from server if not updated
-                src = server_mods_dir / mod.file_name
                 if src.exists():
-                    dest = staging_dir / mod.file_name
-                    if not dest.exists():
-                        shutil.copy2(src, dest)
+                    shutil.copy2(src, dest)
+                    logger.debug("Staged uploaded mod: %s", mod.file_name)
+                else:
+                    logger.warning(
+                        "Upload file missing for %s: %s", mod.name, mod.file_path
+                    )
 
-        # Check if staging differs from current server mods
-        if not has_changes:
-            current_files = {
-                f.name for f in server_mods_dir.iterdir() if f.is_file()
-            } if server_mods_dir.exists() else set()
-            if staged_files != current_files or staged_files != {
-                f.name for f in staging_dir.iterdir() if f.is_file()
-            }:
-                has_changes = True
+            elif mod.source == ModSource.CURSEFORGE:
+                # Try cache → server mods folder → fresh download
+                cached = cache_dir / mod.file_name
+                on_server = server_mods_dir / mod.file_name
+                if cached.exists():
+                    shutil.copy2(cached, dest)
+                elif on_server.exists():
+                    shutil.copy2(on_server, dest)
+                    shutil.copy2(on_server, cached)
+                elif mod.curse_project_id and mod.curse_file_id:
+                    try:
+                        downloaded = await mod_mgr.download_mod_file(
+                            mod.curse_project_id, mod.curse_file_id, cache_dir
+                        )
+                        if downloaded and downloaded.exists():
+                            shutil.copy2(downloaded, dest)
+                        else:
+                            logger.warning(
+                                "Could not fetch CF mod %s", mod.name
+                            )
+                    except Exception:
+                        logger.exception("Failed to fetch CF mod %s", mod.name)
+
+        # 5. Diff desired staging vs current server mods dir
+        desired_files = {
+            f.name: f.stat().st_size
+            for f in staging_dir.iterdir()
+            if f.is_file()
+        }
+        current_files = (
+            {
+                f.name: f.stat().st_size
+                for f in server_mods_dir.iterdir()
+                if f.is_file()
+            }
+            if server_mods_dir.exists()
+            else {}
+        )
+        has_changes = desired_files != current_files
+
+        if has_changes:
+            added = set(desired_files) - set(current_files)
+            removed = set(current_files) - set(desired_files)
+            logger.info(
+                "Mods diff: +%d / -%d / total desired=%d",
+                len(added),
+                len(removed),
+                len(desired_files),
+            )
 
         # 5. Run server update loop if changes exist
         if has_changes:

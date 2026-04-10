@@ -103,12 +103,18 @@ function PendingUploads() {
   useEffect(() => { fetch(); }, [fetch]);
   useSSE(fetch, ["upload_pending", "upload_resolved"]);
 
-  const handleApprove = async (id: number) => {
-    const name = prompt("Enter a display name for this mod:");
-    if (!name) return;
-    setActing(id);
+  const handleApprove = async (u: Upload) => {
+    let name: string | undefined;
+    if (u.mod_id == null) {
+      const entered = prompt("Enter a display name for this mod:");
+      if (!entered) return;
+      name = entered;
+    } else {
+      if (!confirm("Approve this mod update? It will replace the existing file — no vote required.")) return;
+    }
+    setActing(u.id);
     try {
-      await approveUpload(id, name);
+      await approveUpload(u.id, name);
       fetch();
     } catch (err: any) {
       alert(err.message);
@@ -153,7 +159,12 @@ function PendingUploads() {
                 </span>
               </div>
               <p className="font-mono text-[10px] text-white/20 mb-2">
-                {u.status} | {new Date(u.created_at).toLocaleDateString()}
+                {u.mod_id != null ? (
+                  <span className="text-amber-300/70">UPDATE for mod #{u.mod_id}</span>
+                ) : (
+                  <span className="text-emerald-300/70">NEW MOD</span>
+                )}{" "}
+                | {u.status} | {new Date(u.created_at).toLocaleDateString()}
               </p>
               <div className="flex gap-2">
                 <button
@@ -163,7 +174,7 @@ function PendingUploads() {
                   Download
                 </button>
                 <button
-                  onClick={() => handleApprove(u.id)}
+                  onClick={() => handleApprove(u)}
                   disabled={acting === u.id}
                   className="flex-1 rounded bg-emerald-500/20 py-1 font-mono text-xs text-emerald-300 transition hover:bg-emerald-500/30 disabled:opacity-40"
                 >
