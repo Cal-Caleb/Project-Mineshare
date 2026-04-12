@@ -5,6 +5,7 @@ import {
   castBallot,
   getAuditLog,
   getServerStatus,
+  getUptimeStats,
   listActiveVotes,
   listMods,
   listPendingUploads,
@@ -16,6 +17,7 @@ import type {
   Mod,
   ServerStatus,
   Upload,
+  UptimeStats,
   Vote,
 } from "../lib/types";
 
@@ -25,6 +27,7 @@ const card =
 export default function Dashboard() {
   const { user, isAdmin } = useAuth();
   const [status, setStatus] = useState<ServerStatus | null>(null);
+  const [uptime, setUptime] = useState<UptimeStats | null>(null);
   const [mods, setMods] = useState<Mod[]>([]);
   const [votes, setVotes] = useState<Vote[]>([]);
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -32,6 +35,7 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(() => {
     getServerStatus().then(setStatus).catch(() => {});
+    getUptimeStats(30).then(setUptime).catch(() => {});
     listMods("active").then(setMods).catch(() => {});
     listActiveVotes().then(setVotes).catch(() => {});
     getAuditLog(8).then(setRecent).catch(() => {});
@@ -74,18 +78,27 @@ export default function Dashboard() {
       </div>
 
       {/* Stats row */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Server"
-          value={status ? (status.online ? "Online" : "Offline") : "..."}
-          tone={status?.online ? "good" : "bad"}
-        />
-        <StatCard
-          label="Players"
-          value={String(status?.player_count ?? "...")}
-          subtitle={status?.players?.join(", ")}
-        />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <Link to="/status">
+          <StatCard
+            label="Server"
+            value={status ? (status.online ? "Online" : "Offline") : "..."}
+            tone={status?.online ? "good" : "bad"}
+          />
+        </Link>
+        <Link to="/status">
+          <StatCard
+            label="Players"
+            value={String(status?.player_count ?? "...")}
+            subtitle={status?.players?.join(", ")}
+          />
+        </Link>
         <StatCard label="Active Mods" value={String(mods.length)} />
+        <StatCard
+          label="30d Uptime"
+          value={uptime ? `${uptime.uptime_pct}%` : "..."}
+          tone={uptime ? (uptime.uptime_pct >= 95 ? "good" : uptime.uptime_pct >= 80 ? "accent" : "bad") : undefined}
+        />
         <StatCard
           label="Open Votes"
           value={String(votes.length)}

@@ -118,7 +118,7 @@ class ModManager:
                 params={
                     "gameId": self.game_id,
                     "slug": slug,
-                    "pageSize": 1,
+                    "pageSize": 50,
                 },
             )
             if resp.status_code != 200:
@@ -133,7 +133,21 @@ class ModManager:
             if not data:
                 return None
 
-            mod_data = data[0]
+            # CurseForge search is fuzzy — find the exact slug match
+            mod_data = None
+            for entry in data:
+                if entry.get("slug", "").lower() == slug.lower():
+                    mod_data = entry
+                    break
+            if mod_data is None:
+                # Fall back to first result if no exact match
+                mod_data = data[0]
+                logger.warning(
+                    "No exact slug match for '%s', using '%s'",
+                    slug,
+                    mod_data.get("slug"),
+                )
+
             info = self._parse_mod(mod_data)
 
             # Find a compatible file for our MC version + NeoForge
@@ -256,6 +270,24 @@ class ModManager:
             info.game_versions = best.game_versions
             info.supports_neoforge = True
             return info
+
+    async def get_file_changelog(self, project_id: int, file_id: int) -> str | None:
+        """Fetch the changelog for a specific CurseForge file."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self.base_url}/v1/mods/{project_id}/files/{file_id}/changelog",
+                headers=self._headers,
+            )
+            if resp.status_code != 200:
+                return None
+            html = resp.json().get("data", "")
+            if not html:
+                return None
+            # Strip HTML tags for plain-text embed usage
+            import re as _re
+            text = _re.sub(r"<[^>]+>", "", html)
+            text = _re.sub(r"\n{3,}", "\n\n", text).strip()
+            return text[:2000] if text else None
 
     async def download_mod_file(
         self, project_id: int, file_id: int, dest_dir: Path

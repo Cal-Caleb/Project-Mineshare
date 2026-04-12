@@ -12,6 +12,8 @@ import AddMod from "./components/AddMod";
 import ActiveVotes from "./components/ActiveVotes";
 import AuditHistory from "./components/AuditHistory";
 import AdminPanel from "./components/AdminPanel";
+import ServerStatusPage from "./components/ServerStatusPage";
+import ModUpdatesPage from "./components/ModUpdatesPage";
 
 function AppRoutes() {
   const { user, loading, needsUsername } = useAuth();
@@ -41,9 +43,11 @@ function AppRoutes() {
           <AnimatePresence mode="wait">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/status" element={<ServerStatusPage />} />
               <Route path="/mods" element={<ModCatalogue />} />
               <Route path="/add-mod" element={<AddMod />} />
               <Route path="/votes" element={<ActiveVotes />} />
+              <Route path="/updates" element={<ModUpdatesPage />} />
               <Route path="/audit" element={<AuditHistory />} />
               <Route path="/admin" element={<AdminPanel />} />
             </Routes>

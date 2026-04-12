@@ -6,7 +6,7 @@ export interface User {
   discord_username: string;
   discord_avatar: string | null;
   mc_username: string | null;
-  role: "member" | "admin";
+  role: "guest" | "member" | "admin";
   is_whitelisted: boolean;
   is_op: boolean;
   created_at: string;
@@ -47,6 +47,8 @@ export interface CurseForgePreview {
   logo_url: string | null;
   latest_file_name: string | null;
   download_count: number;
+  supports_neoforge: boolean;
+  game_versions: string[];
 }
 
 // ── Votes ────────────────────────────────────────────────────────────
@@ -120,4 +122,52 @@ export interface ServerEvent {
   backup_path: string | null;
   created_at: string;
   completed_at: string | null;
+}
+
+// ── Uptime ──────────────────────────────────────────────────────────
+
+export interface UptimeBucket {
+  bucket: string;
+  online: boolean | null;
+  player_count: number;
+}
+
+export interface UptimeStats {
+  uptime_pct: number;
+  buckets: UptimeBucket[];
+  peak_players: number;
+  avg_players: number;
+  world_size_mb: number | null;
+}
+
+// ── Mod Updates ─────────────────────────────────────────────────────
+
+export interface ModUpdate {
+  id: number;
+  mod_id: number;
+  mod_name: string;
+  mod_slug: string | null;
+  old_version: string | null;
+  new_version: string | null;
+  changelog: string | null;
+  source_url: string | null;
+  created_at: string;
+}
+
+// ── Mod Export ───────────────────────────────────────────────────────
+
+export interface ModExportEntry {
+  name: string;
+  author: string | null;
+  source: string;
+  curse_project_id: number | null;
+  file_name: string | null;
+  source_url: string | null;
+  current_version: string | null;
+}
+
+export interface ModExport {
+  name: string;
+  mod_count: number;
+  mods: ModExportEntry[];
 }

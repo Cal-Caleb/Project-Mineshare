@@ -11,14 +11,23 @@ Strategy:
 
 import asyncio
 import io
+import json
 import logging
-from datetime import datetime, timezone
+import zipfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import discord
 from discord.ext import commands, tasks
 
 from bot import images as banner
-from bot.theme import mod_card_embed, server_status_embed, upload_embed, vote_embed
+from bot.theme import (
+    mod_card_embed,
+    mod_update_embed,
+    server_status_embed,
+    upload_embed,
+    vote_embed,
+)
 from bot.views import RemoveModView, UploadApprovalView, VoteView
 from core.config import get_settings
 from core.database import SessionLocal
@@ -40,8 +49,11 @@ from core.vote_manager import VoteManager
 from core.whitelist_manager import WhitelistManager
 from models import (
     Mod,
+    ModSource,
     ModStatus,
+    ModUpdateLog,
     ModUpload,
+    ServerHeartbeat,
     UploadStatus,
     User,
     UserRole,
@@ -154,11 +166,10 @@ class EventsListenerCog(commands.Cog):
                         await self.sync_uploads()
                     elif ch == CHANNEL_SERVER_UPDATE:
                         await self.refresh_status()
-                    elif ch in (
-                        CHANNEL_MOD_ADDED,
-                        CHANNEL_MOD_REMOVED,
-                        CHANNEL_MOD_UPDATED,
-                    ):
+                    elif ch == CHANNEL_MOD_UPDATED:
+                        await self.sync_mod_list()
+                        await self._post_mod_update(data)
+                    elif ch in (CHANNEL_MOD_ADDED, CHANNEL_MOD_REMOVED):
                         await self.sync_mod_list()
                 except Exception:
                     logger.exception("Failed handling event %s: %s", ch, data)
@@ -501,6 +512,88 @@ class EventsListenerCog(commands.Cog):
     async def _wait_status(self):
         await self.bot.wait_until_ready()
 
+    @staticmethod
+    def _bucket_now() -> datetime:
+        """Round current UTC time down to the nearest 10-minute boundary.
+
+        Returns a NAIVE datetime (no tzinfo) because PostgreSQL DateTime
+        without timezone=True strips tz, and we need dict lookups to match.
+        """
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        return now.replace(minute=now.minute // 10 * 10, second=0, microsecond=0)
+
+    def _record_heartbeat(
+        self, db, *, online: bool, player_count: int
+    ) -> None:
+        bucket = self._bucket_now()
+        existing = (
+            db.query(ServerHeartbeat)
+            .filter(ServerHeartbeat.bucket == bucket)
+            .first()
+        )
+        if existing:
+            # If any check in the bucket saw online, keep it online
+            if online:
+                existing.online = True
+            existing.player_count = max(existing.player_count, player_count)
+            existing.checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        else:
+            db.add(
+                ServerHeartbeat(
+                    bucket=bucket,
+                    online=online,
+                    player_count=player_count,
+                    checked_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+        db.commit()
+
+    def _get_uptime_buckets(self, db, hours: int = 720) -> list[dict]:
+        """Return the last N hours of 10-minute buckets for uptime display.
+        Default 720h = 30 days.
+
+        All datetimes are naive UTC to match what PostgreSQL stores.
+        """
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = now - timedelta(hours=hours)
+        rows = (
+            db.query(ServerHeartbeat)
+            .filter(ServerHeartbeat.bucket >= cutoff)
+            .order_by(ServerHeartbeat.bucket.asc())
+            .all()
+        )
+
+        # Build lookup — strip tzinfo from DB values in case some have it
+        lookup = {}
+        for r in rows:
+            key = r.bucket.replace(tzinfo=None) if r.bucket.tzinfo else r.bucket
+            lookup[key] = r
+
+        buckets = []
+        b = cutoff.replace(minute=cutoff.minute // 10 * 10, second=0, microsecond=0)
+        while b <= now:
+            row = lookup.get(b)
+            buckets.append(
+                {
+                    "bucket": b.isoformat(),
+                    "online": row.online if row else None,
+                    "players": row.player_count if row else 0,
+                }
+            )
+            b += timedelta(minutes=10)
+        return buckets
+
+    def _get_world_size_mb(self) -> float | None:
+        """Return world directory size in MB, or None if not found."""
+        try:
+            world_path = Path(self.settings.server_path) / "world"
+            if not world_path.exists():
+                return None
+            total = sum(f.stat().st_size for f in world_path.rglob("*") if f.is_file())
+            return total / (1024 * 1024)
+        except Exception:
+            return None
+
     async def refresh_status(self) -> None:
         channel = await self._get_channel("channel_server_status")
         if channel is None:
@@ -526,26 +619,51 @@ class EventsListenerCog(commands.Cog):
             logger.exception("Failed to fetch server status")
             status = {"online": False, "players": [], "player_count": 0}
 
+        is_online = status.get("online", False)
+        player_count = status.get("player_count", 0)
+
+        # World size (can be slow, run in executor)
+        world_size_mb = await loop.run_in_executor(None, self._get_world_size_mb)
+
         db = SessionLocal()
         try:
             active_mods = (
                 db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).count()
             )
+            # Record heartbeat
+            self._record_heartbeat(
+                db, online=is_online, player_count=player_count
+            )
+            # Get uptime history for 30 days
+            buckets = self._get_uptime_buckets(db, hours=720)
         finally:
             db.close()
 
+        # Calculate uptime percentage from full 30-day window
+        recent = [b for b in buckets if b["online"] is not None]
+        if recent:
+            up_count = sum(1 for b in recent if b["online"])
+            uptime_pct = round(100 * up_count / len(recent), 1)
+        else:
+            uptime_pct = 0.0
+
         img_name = "status.png"
         png = banner.status_banner(
-            online=status.get("online", False),
-            player_count=status.get("player_count", 0),
+            online=is_online,
+            player_count=player_count,
             active_mods=active_mods,
+            uptime_pct=uptime_pct,
+            uptime_buckets=buckets,
+            world_size_mb=world_size_mb,
         )
 
         embed = server_status_embed(
-            online=status.get("online", False),
+            online=is_online,
             players=status.get("players", []),
             last_checked=datetime.now(timezone.utc),
             active_mods=active_mods,
+            uptime_pct=uptime_pct,
+            world_size_mb=world_size_mb,
             image_filename=img_name,
         )
 
@@ -582,6 +700,116 @@ class EventsListenerCog(commands.Cog):
         except discord.HTTPException:
             logger.exception("Failed to edit status message")
 
+
+    # ── Mod update channel ────────────────────────────────────────────
+
+    async def _post_mod_update(self, data: dict) -> None:
+        """Post a mod update notification to the mod-updates channel."""
+        channel = await self._get_channel("channel_mod_updates")
+        if channel is None:
+            return
+
+        mod_name = data.get("name", "Unknown Mod")
+        old_version = data.get("old_version")
+        new_version = data.get("new_version")
+        changelog = data.get("changelog")
+
+        # Look up source URL from DB
+        source_url = None
+        db = SessionLocal()
+        try:
+            mod_id = data.get("mod_id")
+            if mod_id:
+                mod = db.query(Mod).filter(Mod.id == mod_id).first()
+                if mod:
+                    source_url = mod.source_url
+        finally:
+            db.close()
+
+        img_name = f"update_{mod_name[:20].replace(' ', '_')}.png"
+        png = banner.update_log_banner(
+            mod_name=mod_name,
+            old_version=old_version,
+            new_version=new_version,
+        )
+        file = discord.File(io.BytesIO(png), filename=img_name)
+
+        embed = mod_update_embed(
+            mod_name=mod_name,
+            old_version=old_version,
+            new_version=new_version,
+            changelog=changelog,
+            source_url=source_url,
+            image_filename=img_name,
+        )
+
+        try:
+            await channel.send(embed=embed, file=file)
+        except discord.HTTPException:
+            logger.exception("Failed to post mod update for %s", mod_name)
+
+    # ── Mod export command ──────────────────────────────────────────
+
+    @commands.command(name="modlist")
+    async def modlist_command(self, ctx: commands.Context):
+        """Send a text file listing all active mods."""
+        db = SessionLocal()
+        try:
+            active = (
+                db.query(Mod)
+                .filter(Mod.status == ModStatus.ACTIVE)
+                .order_by(Mod.name.asc())
+                .all()
+            )
+
+            if not active:
+                await ctx.reply("No active mods on the server.")
+                return
+
+            lines = [f"MineShare Active Mod List ({len(active)} mods)", "=" * 50, ""]
+            for m in active:
+                line = f"• {m.name}"
+                if m.author:
+                    line += f" (by {m.author})"
+                if m.current_version:
+                    line += f" — {m.current_version}"
+                if m.source_url:
+                    line += f"\n  {m.source_url}"
+                lines.append(line)
+
+            text = "\n".join(lines)
+
+            # Also create a JSON manifest for easy importing
+            manifest = {
+                "name": "MineShare Modpack",
+                "mods": [
+                    {
+                        "name": m.name,
+                        "author": m.author,
+                        "source": m.source.value if m.source else "unknown",
+                        "curse_project_id": m.curse_project_id,
+                        "file_name": m.file_name,
+                        "source_url": m.source_url,
+                    }
+                    for m in active
+                ],
+            }
+
+            txt_file = discord.File(
+                io.BytesIO(text.encode("utf-8")),
+                filename="mineshare_modlist.txt",
+            )
+            json_file = discord.File(
+                io.BytesIO(json.dumps(manifest, indent=2).encode("utf-8")),
+                filename="mineshare_modlist.json",
+            )
+
+            await ctx.reply(
+                f"Here's the current mod list ({len(active)} active mods):",
+                files=[txt_file, json_file],
+            )
+        finally:
+            db.close()
 
     # ── Live Discord role sync ───────────────────────────────────────
 

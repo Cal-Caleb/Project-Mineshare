@@ -34,6 +34,8 @@ def _apply_lightweight_migrations() -> None:
         # Mod catalogue channel tracking
         "ALTER TABLE mods ADD COLUMN IF NOT EXISTS discord_message_id VARCHAR(20)",
         "ALTER TABLE mods ADD COLUMN IF NOT EXISTS discord_channel_id VARCHAR(20)",
+        # Server heartbeats table (created by Base.metadata.create_all but just in case)
+        # mod_update_logs table (created by Base.metadata.create_all)
     ]
     with engine.begin() as conn:
         for stmt in alters:

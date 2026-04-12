@@ -7,9 +7,11 @@ type NavLink = { to: string; label: string; adminOnly?: boolean };
 
 const links: NavLink[] = [
   { to: "/", label: "Dashboard" },
+  { to: "/status", label: "Status" },
   { to: "/mods", label: "Mods" },
   { to: "/add-mod", label: "Add Mod" },
   { to: "/votes", label: "Votes" },
+  { to: "/updates", label: "Updates" },
   { to: "/audit", label: "Audit" },
   { to: "/admin", label: "Admin", adminOnly: true },
 ];

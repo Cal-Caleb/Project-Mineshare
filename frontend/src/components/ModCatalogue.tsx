@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { listMods, removeMod, uploadModUpdate } from "../lib/api";
+import { downloadModpack, listMods, removeMod, uploadModUpdate } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { useSSE } from "../hooks/useSSE";
 import type { Mod } from "../lib/types";
@@ -80,7 +80,21 @@ export default function ModCatalogue() {
   return (
     <motion.div {...fade} className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-serif text-3xl text-gold-light">Mod Catalogue</h1>
+        <div className="flex items-center gap-4">
+          <h1 className="font-serif text-3xl text-gold-light">Mod Catalogue</h1>
+          <button
+            onClick={() => downloadModpack()}
+            className="rounded-lg border border-gold/20 px-4 py-1.5 font-mono text-xs text-gold/70 transition hover:bg-gold/10 hover:text-gold"
+            title="Download mod list as ZIP (JSON + TXT + HTML)"
+          >
+            <span className="flex items-center gap-1.5">
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Export Modpack
+            </span>
+          </button>
+        </div>
 
         <div className="flex items-center gap-3">
           {/* Filter tabs */}

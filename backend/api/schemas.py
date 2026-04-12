@@ -179,5 +179,58 @@ class ServerEventOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Uptime / Status History ──────────────────────────────────────────
+
+
+class UptimeBucket(BaseModel):
+    bucket: datetime
+    online: Optional[bool] = None
+    player_count: int = 0
+
+
+class UptimeStats(BaseModel):
+    uptime_pct: float
+    buckets: list[UptimeBucket]
+    peak_players: int
+    avg_players: float
+    world_size_mb: Optional[float] = None
+
+
+# ── Mod Updates ─────────────────────────────────────────────────────
+
+
+class ModUpdateOut(BaseModel):
+    id: int
+    mod_id: int
+    mod_name: str
+    mod_slug: Optional[str] = None
+    old_version: Optional[str] = None
+    new_version: Optional[str] = None
+    changelog: Optional[str] = None
+    source_url: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Mod Export ──────────────────────────────────────────────────────
+
+
+class ModExportEntry(BaseModel):
+    name: str
+    author: Optional[str] = None
+    source: str
+    curse_project_id: Optional[int] = None
+    file_name: Optional[str] = None
+    source_url: Optional[str] = None
+    current_version: Optional[str] = None
+
+
+class ModExportOut(BaseModel):
+    name: str = "MineShare Modpack"
+    mod_count: int
+    mods: list[ModExportEntry]
+
+
 # Rebuild forward refs
 TokenResponse.model_rebuild()

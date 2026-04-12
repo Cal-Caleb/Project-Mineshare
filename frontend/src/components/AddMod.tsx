@@ -140,29 +140,59 @@ function CurseForgeTab() {
               </p>
               <div className="mt-2 flex gap-4 font-mono text-[10px] text-white/30">
                 <span>{preview.download_count.toLocaleString()} downloads</span>
-                <span>{preview.latest_file_name}</span>
+                {preview.latest_file_name && <span>{preview.latest_file_name}</span>}
               </div>
+
+              {/* Compatibility badge */}
+              {preview.supports_neoforge ? (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 font-mono text-[10px] text-emerald-400 ring-1 ring-emerald-500/20">
+                    ✓ NeoForge compatible
+                  </span>
+                  {preview.game_versions.length > 0 && (
+                    <span className="font-mono text-[10px] text-white/30">
+                      {preview.game_versions.filter(v => /^\d/.test(v)).join(", ")}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+                  <p className="font-mono text-xs text-red-400">
+                    ⚠ Not available for your server
+                  </p>
+                  <p className="mt-0.5 font-mono text-[10px] text-red-400/60">
+                    No NeoForge-compatible file found for your Minecraft version.
+                    This mod may only support Forge or a different MC version.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="mt-4 flex gap-3">
-            <button
-              onClick={() => handleAdd(false)}
-              disabled={adding}
-              className="rounded-lg bg-gold/20 px-5 py-2 font-mono text-sm text-gold transition hover:bg-gold/30 disabled:opacity-40"
-            >
-              {adding ? "Adding..." : "Add (starts vote)"}
-            </button>
-            {isAdmin && (
+          {preview.supports_neoforge ? (
+            <div className="mt-4 flex gap-3">
               <button
-                onClick={() => handleAdd(true)}
+                onClick={() => handleAdd(false)}
                 disabled={adding}
-                className="rounded-lg border border-gold/20 px-5 py-2 font-mono text-sm text-gold/70 transition hover:bg-gold/10 disabled:opacity-40"
+                className="rounded-lg bg-gold/20 px-5 py-2 font-mono text-sm text-gold transition hover:bg-gold/30 disabled:opacity-40"
               >
-                Force Add
+                {adding ? "Adding..." : "Add (starts vote)"}
               </button>
-            )}
-          </div>
+              {isAdmin && (
+                <button
+                  onClick={() => handleAdd(true)}
+                  disabled={adding}
+                  className="rounded-lg border border-gold/20 px-5 py-2 font-mono text-sm text-gold/70 transition hover:bg-gold/10 disabled:opacity-40"
+                >
+                  Force Add
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="mt-4 font-mono text-xs text-white/30 italic">
+              Adding is disabled — this mod doesn't support your server's configuration.
+            </p>
+          )}
         </motion.div>
       )}
     </div>

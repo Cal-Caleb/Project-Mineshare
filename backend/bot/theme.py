@@ -153,6 +153,8 @@ def server_status_embed(
     players: list[str],
     last_checked: datetime,
     active_mods: int | None = None,
+    uptime_pct: float = 0.0,
+    world_size_mb: float | None = None,
     image_filename: str | None = None,
 ) -> discord.Embed:
     color = ACCENT_GREEN if online else ACCENT_RED
@@ -167,6 +169,18 @@ def server_status_embed(
         inline=True,
     )
 
+    embed.add_field(
+        name="30d Uptime",
+        value=f"{uptime_pct:.1f}%",
+        inline=True,
+    )
+
+    if world_size_mb is not None:
+        if world_size_mb >= 1024:
+            embed.add_field(name="World Size", value=f"{world_size_mb / 1024:.1f} GB", inline=True)
+        else:
+            embed.add_field(name="World Size", value=f"{world_size_mb:.0f} MB", inline=True)
+
     if online and players:
         embed.add_field(
             name=f"Online now ({len(players)})",
@@ -178,6 +192,47 @@ def server_status_embed(
 
     embed.set_footer(text=f"⛏  {BRAND}")
     embed.timestamp = last_checked
+    return embed
+
+
+# ── Mod update embed ─────────────────────────────────────────────────
+
+def mod_update_embed(
+    *,
+    mod_name: str,
+    old_version: str | None,
+    new_version: str | None,
+    changelog: str | None = None,
+    source_url: str | None = None,
+    image_filename: str | None = None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        color=ACCENT_BLUE,
+    )
+    if image_filename:
+        embed.set_image(url=f"attachment://{image_filename}")
+
+    embed.add_field(
+        name="Old Version",
+        value=f"`{old_version or 'unknown'}`",
+        inline=True,
+    )
+    embed.add_field(
+        name="New Version",
+        value=f"`{new_version or 'unknown'}`",
+        inline=True,
+    )
+
+    if source_url:
+        embed.add_field(name="Link", value=f"[CurseForge]({source_url})", inline=True)
+
+    if changelog:
+        # Truncate to fit Discord embed limits
+        cl = changelog[:1000] + "…" if len(changelog) > 1000 else changelog
+        embed.add_field(name="Changelog", value=cl, inline=False)
+
+    embed.set_footer(text=f"⛏  {BRAND}")
+    embed.timestamp = datetime.now(timezone.utc)
     return embed
 
 

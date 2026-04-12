@@ -2,9 +2,12 @@ import type {
   AuditEntry,
   CurseForgePreview,
   Mod,
+  ModExport,
+  ModUpdate,
   ServerEvent,
   ServerStatus,
   Upload,
+  UptimeStats,
   User,
   Vote,
 } from "./types";
@@ -189,6 +192,35 @@ export function createBackup(): Promise<{ status: string; backup_file: string }>
 
 export function getServerEvents(limit = 20): Promise<ServerEvent[]> {
   return request<ServerEvent[]>(`/server/events?limit=${limit}`);
+}
+
+export function getUptimeStats(days = 30): Promise<UptimeStats> {
+  return request<UptimeStats>(`/server/uptime?days=${days}`);
+}
+
+export function getModUpdates(limit = 50): Promise<ModUpdate[]> {
+  return request<ModUpdate[]>(`/server/updates?limit=${limit}`);
+}
+
+export function getModpackManifest(): Promise<ModExport> {
+  return request<ModExport>("/server/modpack");
+}
+
+export function downloadModpack(): void {
+  const token = getToken();
+  const url = `${BASE}/server/modpack/download`;
+  fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    .then((res) => {
+      if (!res.ok) throw new Error("Download failed");
+      return res.blob();
+    })
+    .then((blob) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "mineshare_modpack.zip";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
 }
 
 // ── Audit ────────────────────────────────────────────────────────────

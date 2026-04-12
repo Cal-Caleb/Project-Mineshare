@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     channel_mod_proposals: str = ""
     channel_mod_uploads: str = ""
     channel_server_status: str = ""
+    channel_mod_updates: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

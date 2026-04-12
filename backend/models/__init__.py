@@ -286,3 +286,36 @@ class ServerEvent(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     triggered_by_user: Mapped["User | None"] = relationship()
+
+
+class ServerHeartbeat(Base):
+    """One row per 10-minute window. Records whether the server was online."""
+
+    __tablename__ = "server_heartbeats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bucket: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, unique=True, index=True
+    )
+    online: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    player_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class ModUpdateLog(Base):
+    """Records each time a mod is updated to a new version (with changelog)."""
+
+    __tablename__ = "mod_update_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mod_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mods.id"), nullable=False
+    )
+    old_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    new_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    old_file_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_file_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    mod: Mapped["Mod"] = relationship()

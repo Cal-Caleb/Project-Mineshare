@@ -27,7 +27,7 @@ from core.mod_manager import ModManager
 from core.server_manager import ServerManager
 from core.vote_manager import VoteManager
 from core.whitelist_manager import WhitelistManager
-from models import ModSource
+from models import ModSource, ModUpdateLog
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +123,31 @@ async def run_update_cycle() -> None:
                 )
                 if new_file:
                     old_file_name = mod.file_name
+                    old_file_id = mod.curse_file_id
+
+                    # Fetch changelog from CurseForge
+                    changelog = None
+                    try:
+                        changelog = await mod_mgr.get_file_changelog(
+                            info.project_id, info.latest_file_id
+                        )
+                    except Exception:
+                        logger.warning("Could not fetch changelog for %s", mod.name)
+
                     mod.curse_file_id = info.latest_file_id
                     mod.current_version = info.latest_file_name
                     mod.file_name = info.latest_file_name
                     mod.file_hash = ModManager.calculate_file_hash(new_file)
+
+                    # Record update log with changelog
+                    db.add(ModUpdateLog(
+                        mod_id=mod.id,
+                        old_version=old_file_name,
+                        new_version=info.latest_file_name,
+                        old_file_id=old_file_id,
+                        new_file_id=info.latest_file_id,
+                        changelog=changelog,
+                    ))
                     db.commit()
 
                     await bus.publish(
@@ -136,6 +157,7 @@ async def run_update_cycle() -> None:
                             "name": mod.name,
                             "old_version": old_file_name,
                             "new_version": info.latest_file_name,
+                            "changelog": (changelog[:500] if changelog else None),
                         },
                     )
             except Exception:
