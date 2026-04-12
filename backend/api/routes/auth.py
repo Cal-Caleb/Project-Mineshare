@@ -80,7 +80,7 @@ async def callback(
         avatar = discord_user.get("avatar")
 
         # 3. Check guild membership and roles
-        role = UserRole.MEMBER
+        role = UserRole.GUEST
         if settings.discord_guild_id:
             member_resp = await client.get(
                 f"https://discord.com/api/v10/users/@me/guilds/{settings.discord_guild_id}/member",
@@ -89,8 +89,10 @@ async def callback(
             if member_resp.status_code == 200:
                 member = member_resp.json()
                 member_roles = member.get("roles", [])
-                if settings.discord_role2_id in member_roles:
+                if settings.discord_role2_id and settings.discord_role2_id in member_roles:
                     role = UserRole.ADMIN
+                elif settings.discord_role1_id and settings.discord_role1_id in member_roles:
+                    role = UserRole.MEMBER
             else:
                 return _frontend_error(settings, "You are not a member of the server Discord")
 

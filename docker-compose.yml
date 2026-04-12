@@ -35,6 +35,7 @@ services:
       redis:
         condition: service_started
     volumes:
+      - ./backend:/app
       - ./backend/opt/minecraft/server:/opt/minecraft/server
       - ./backend/opt/minecraft/backups:/opt/minecraft/backups
       - ./backend/opt/minecraft/uploads:/opt/minecraft/uploads

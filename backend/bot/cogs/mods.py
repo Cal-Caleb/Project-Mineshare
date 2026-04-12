@@ -2,7 +2,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.views import VoteView, AdminVoteView
 from core.database import SessionLocal
 from core.events import CHANNEL_MOD_ADDED, get_event_bus
 from core.mod_manager import ModManager
@@ -56,44 +55,18 @@ class ModsCog(commands.Cog):
                 return
 
             if mod.status == ModStatus.ACTIVE:
-                embed = discord.Embed(
-                    title=f"Mod Added: {mod.name}",
-                    description=info.summary or "No description",
-                    color=discord.Color.green(),
+                await interaction.followup.send(
+                    f"✅ **{mod.name}** added directly (admin force)."
                 )
-                embed.add_field(name="Author", value=info.author)
-                embed.add_field(name="Version", value=info.latest_file_name or "N/A")
-                embed.add_field(name="Added by", value=interaction.user.display_name)
-                if info.logo_url:
-                    embed.set_thumbnail(url=info.logo_url)
-                await interaction.followup.send(embed=embed)
             else:
-                # Create vote
                 vote_mgr = VoteManager()
-                vote = vote_mgr.create_vote(db, mod, VoteType.ADD, user, source=EventSource.DISCORD)
-
-                embed = discord.Embed(
-                    title=f"Vote: Add {mod.name}?",
-                    description=info.summary or "No description",
-                    color=discord.Color.gold(),
+                vote_mgr.create_vote(
+                    db, mod, VoteType.ADD, user, source=EventSource.DISCORD
                 )
-                embed.add_field(name="Author", value=info.author)
-                embed.add_field(name="Proposed by", value=interaction.user.display_name)
-                embed.add_field(name="Expires", value=f"<t:{int(vote.expires_at.timestamp())}:R>")
-                if info.logo_url:
-                    embed.set_thumbnail(url=info.logo_url)
-                embed.set_footer(text=f"Vote ID: {vote.id} | Simple majority wins")
-
-                msg = await interaction.followup.send(
-                    embed=embed,
-                    view=VoteView(vote.id),
-                    wait=True,
+                await interaction.followup.send(
+                    f"🗳️ Vote started for **{mod.name}** — check the votes channel.",
+                    ephemeral=True,
                 )
-
-                # Store Discord message ID for later updates
-                vote.discord_message_id = str(msg.id)
-                vote.discord_channel_id = str(msg.channel.id)
-                db.commit()
 
             bus = get_event_bus()
             await bus.publish(
@@ -141,23 +114,17 @@ class ModsCog(commands.Cog):
 
             vote_mgr = VoteManager()
             try:
-                vote = vote_mgr.create_vote(db, mod, VoteType.REMOVE, user, source=EventSource.DISCORD)
+                vote_mgr.create_vote(
+                    db, mod, VoteType.REMOVE, user, source=EventSource.DISCORD
+                )
             except ValueError as e:
                 await interaction.followup.send(str(e), ephemeral=True)
                 return
 
-            embed = discord.Embed(
-                title=f"Vote: Remove {mod.name}?",
-                description=f"Proposed by {interaction.user.display_name}",
-                color=discord.Color.red(),
+            await interaction.followup.send(
+                f"🗳️ Removal vote started for **{mod.name}** — check the votes channel.",
+                ephemeral=True,
             )
-            embed.add_field(name="Expires", value=f"<t:{int(vote.expires_at.timestamp())}:R>")
-            embed.set_footer(text=f"Vote ID: {vote.id} | Simple majority wins")
-
-            msg = await interaction.followup.send(embed=embed, view=VoteView(vote.id), wait=True)
-            vote.discord_message_id = str(msg.id)
-            vote.discord_channel_id = str(msg.channel.id)
-            db.commit()
         finally:
             db.close()
 

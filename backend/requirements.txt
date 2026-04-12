@@ -29,3 +29,6 @@ discord.py==2.4.0
 
 # Compression
 zstandard==0.23.0
+
+# Image generation for Discord embeds
+Pillow==10.4.0

@@ -3,7 +3,6 @@
 import discord
 
 from core.database import SessionLocal
-from core.events import CHANNEL_VOTE_CAST, CHANNEL_VOTE_RESOLVED, get_event_bus
 from core.vote_manager import VoteManager
 from core.upload_manager import UploadManager
 from models import (
@@ -12,7 +11,6 @@ from models import (
     User,
     UserRole,
     Vote,
-    VoteStatus,
 )
 
 
@@ -79,53 +77,75 @@ class VoteView(discord.ui.View):
             await interaction.response.send_message(
                 f"**{interaction.user.display_name}** voted **{label}**! "
                 f"(Yes: {tally['yes']} / No: {tally['no']})",
-            )
-
-            # Update the embed if vote resolved
-            if vote.status != VoteStatus.PENDING:
-                await self._update_embed(interaction, vote, tally)
-
-            bus = get_event_bus()
-            await bus.publish(
-                CHANNEL_VOTE_CAST,
-                {
-                    "vote_id": vote.id,
-                    "mod_name": vote.mod.name,
-                    "user": user.discord_username,
-                    "in_favor": in_favor,
-                    "status": vote.status.value,
-                },
+                ephemeral=True,
             )
         finally:
             db.close()
 
-    async def _update_embed(self, interaction, vote, tally):
-        status_emoji = {
-            VoteStatus.APPROVED: "\u2705",
-            VoteStatus.REJECTED: "\u274c",
-            VoteStatus.VETOED: "\U0001f6ab",
-            VoteStatus.FORCE_APPROVED: "\u26a1",
-            VoteStatus.EXPIRED: "\u23f0",
-        }
-        emoji = status_emoji.get(vote.status, "")
+    @discord.ui.button(
+        label="Veto",
+        style=discord.ButtonStyle.secondary,
+        custom_id="vote_admin_veto",
+        emoji="\U0001f6ab",
+        row=1,
+    )
+    async def admin_veto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = SessionLocal()
         try:
-            msg = interaction.message
-            if msg and msg.embeds:
-                embed = msg.embeds[0]
-                embed.color = discord.Color.green() if vote.status in (
-                    VoteStatus.APPROVED, VoteStatus.FORCE_APPROVED
-                ) else discord.Color.red()
-                embed.set_footer(
-                    text=f"{emoji} {vote.status.value.upper()} | "
-                    f"Yes: {tally['yes']} No: {tally['no']}"
+            user = _get_user(db, interaction.user.id)
+            if not user or user.role != UserRole.ADMIN:
+                await interaction.response.send_message(
+                    "Admin only.", ephemeral=True
                 )
-                await msg.edit(embed=embed, view=None)
-        except Exception:
-            pass
+                return
+            vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
+            if not vote:
+                await interaction.response.send_message("Vote not found.", ephemeral=True)
+                return
+            try:
+                VoteManager().veto(db, vote, user, source=EventSource.DISCORD)
+            except (ValueError, PermissionError) as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+            await interaction.response.send_message(
+                f"\U0001f6ab Vote on **{vote.mod.name}** vetoed.", ephemeral=True
+            )
+        finally:
+            db.close()
 
+    @discord.ui.button(
+        label="Force Pass",
+        style=discord.ButtonStyle.secondary,
+        custom_id="vote_admin_force_pass",
+        emoji="\u26a1",
+        row=1,
+    )
+    async def admin_force_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = SessionLocal()
+        try:
+            user = _get_user(db, interaction.user.id)
+            if not user or user.role != UserRole.ADMIN:
+                await interaction.response.send_message(
+                    "Admin only.", ephemeral=True
+                )
+                return
+            vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
+            if not vote:
+                await interaction.response.send_message("Vote not found.", ephemeral=True)
+                return
+            try:
+                VoteManager().force_pass(db, vote, user, source=EventSource.DISCORD)
+            except (ValueError, PermissionError) as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+            await interaction.response.send_message(
+                f"\u26a1 Vote on **{vote.mod.name}** force-passed.", ephemeral=True
+            )
+        finally:
+            db.close()
 
 class AdminVoteView(discord.ui.View):
-    """Admin-only buttons for veto/force-pass, shown alongside VoteView."""
+    """Admin-only buttons for veto/force-pass — kept for backwards compat."""
 
     def __init__(self, vote_id: int):
         super().__init__(timeout=None)
@@ -213,7 +233,40 @@ class UploadApprovalView(discord.ui.View):
         custom_id="upload_approve",
     )
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(UploadApproveModal(self.upload_id))
+        db = SessionLocal()
+        try:
+            user = _get_user(db, interaction.user.id)
+            if not user or user.role != UserRole.ADMIN:
+                await interaction.response.send_message(
+                    "Admin access required.", ephemeral=True
+                )
+                return
+
+            upload = db.query(ModUpload).filter(ModUpload.id == self.upload_id).first()
+            if not upload:
+                await interaction.response.send_message(
+                    "Upload not found.", ephemeral=True
+                )
+                return
+
+            # Updates skip the name prompt and the vote.
+            if upload.mod_id is not None:
+                mgr = UploadManager()
+                try:
+                    mgr.approve_mod_update(db, upload, user)
+                except (ValueError, PermissionError) as e:
+                    await interaction.response.send_message(str(e), ephemeral=True)
+                    return
+                await interaction.response.send_message(
+                    f"\u2705 Update **{upload.original_filename}** approved."
+                )
+            else:
+                # New mods still need an admin-chosen display name
+                await interaction.response.send_modal(
+                    UploadApproveModal(self.upload_id)
+                )
+        finally:
+            db.close()
 
     @discord.ui.button(
         label="Reject",
@@ -240,7 +293,6 @@ class UploadApprovalView(discord.ui.View):
             await interaction.response.send_message(
                 f"\u274c Upload **{upload.original_filename}** rejected."
             )
-            await interaction.message.edit(view=None)
         finally:
             db.close()
 

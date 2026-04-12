@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from sqlalchemy import text
+
 from api.routes import audit, auth, mods, server, sse, uploads, users, votes
 from core.config import get_settings
 from core.database import Base, engine
@@ -20,10 +22,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _apply_lightweight_migrations() -> None:
+    """Idempotent ALTERs for columns added to existing tables."""
+    alters = [
+        "ALTER TABLE mod_uploads ADD COLUMN IF NOT EXISTS discord_message_id VARCHAR(20)",
+        "ALTER TABLE mod_uploads ADD COLUMN IF NOT EXISTS discord_channel_id VARCHAR(20)",
+        "ALTER TABLE votes ADD COLUMN IF NOT EXISTS discord_message_id VARCHAR(20)",
+        "ALTER TABLE votes ADD COLUMN IF NOT EXISTS discord_channel_id VARCHAR(20)",
+        # Add GUEST to userrole enum if it isn't there yet
+        "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'GUEST'",
+    ]
+    with engine.begin() as conn:
+        for stmt in alters:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                logger.exception("Migration failed: %s", stmt)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting MineShare API...")
     Base.metadata.create_all(bind=engine)
+    _apply_lightweight_migrations()
     start_scheduler()
     yield
     logger.info("Shutting down MineShare API...")

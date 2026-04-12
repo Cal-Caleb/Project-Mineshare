@@ -153,7 +153,7 @@ export default function ModCatalogue() {
 
               {/* Actions */}
               {mod.status === "active" && user && (
-                <div className="mt-4 flex flex-wrap gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="mt-4 flex flex-wrap gap-2">
                   {mod.source === "upload" &&
                     (mod.added_by?.id === user.id || isAdmin) && (
                       <>

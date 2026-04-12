@@ -107,13 +107,15 @@ class WhitelistManager:
                     )
                     if resp.status_code == 404:
                         # User left the guild — revoke everything
-                        if user.role != UserRole.MEMBER or user.is_whitelisted:
-                            user.role = UserRole.MEMBER
+                        if user.role != UserRole.GUEST or user.is_whitelisted or user.is_op:
+                            user.role = UserRole.GUEST
+                            if user.mc_username:
+                                if user.is_whitelisted:
+                                    self.server.whitelist_remove(user.mc_username)
+                                if user.is_op:
+                                    self.server.op_remove(user.mc_username)
                             user.is_whitelisted = False
                             user.is_op = False
-                            if user.mc_username:
-                                self.server.whitelist_remove(user.mc_username)
-                                self.server.op_remove(user.mc_username)
                             changed += 1
                         continue
 
@@ -123,14 +125,23 @@ class WhitelistManager:
                     member = resp.json()
                     roles = member.get("roles", [])
 
-                    new_role = UserRole.MEMBER
-                    if self.role2_id and self.role2_id in roles:
+                    has_admin = bool(self.role2_id) and self.role2_id in roles
+                    has_member = bool(self.role1_id) and self.role1_id in roles
+
+                    if has_admin:
                         new_role = UserRole.ADMIN
-                    elif self.role1_id and self.role1_id not in roles:
-                        # No role1 = no access at all
+                    elif has_member:
                         new_role = UserRole.MEMBER
+                    else:
+                        new_role = UserRole.GUEST
 
                     if user.role != new_role:
+                        logger.info(
+                            "Role change: %s %s -> %s",
+                            user.discord_username,
+                            user.role.value,
+                            new_role.value,
+                        )
                         user.role = new_role
                         changed += 1
 
@@ -152,6 +163,8 @@ class WhitelistManager:
         if not user.mc_username:
             return changes
 
+        # Role1 (MEMBER) → whitelisted; Role2 (ADMIN) → whitelisted + opped.
+        # GUEST (no role) → no whitelist, no op.
         should_whitelist = user.role in (UserRole.MEMBER, UserRole.ADMIN)
         should_op = user.role == UserRole.ADMIN
 

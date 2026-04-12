@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
 
     # Discord channels
+    channel_active_votes: str = ""
     channel_mod_proposals: str = ""
     channel_mod_uploads: str = ""
     channel_server_status: str = ""

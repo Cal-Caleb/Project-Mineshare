@@ -10,7 +10,7 @@ from api.deps import (
 )
 from api.schemas import ApproveUpload, RejectUpload, UploadOut
 from core.database import get_db
-from core.events import CHANNEL_UPLOAD_PENDING, CHANNEL_UPLOAD_RESOLVED, get_event_bus
+from core.events import CHANNEL_UPLOAD_PENDING, get_event_bus
 from core.upload_manager import UploadManager
 from models import ModUpload, User
 
@@ -115,17 +115,6 @@ async def approve_upload(
     except (ValueError, PermissionError) as e:
         raise HTTPException(400, str(e))
 
-    bus = get_event_bus()
-    await bus.publish(
-        CHANNEL_UPLOAD_RESOLVED,
-        {
-            "upload_id": upload.id,
-            "filename": upload.original_filename,
-            "status": "approved",
-            "by": admin.discord_username,
-        },
-    )
-
     return _upload_to_out(upload)
 
 
@@ -145,17 +134,6 @@ async def reject_upload(
         mgr.reject_upload(db, upload, admin, body.reason)
     except PermissionError as e:
         raise HTTPException(403, str(e))
-
-    bus = get_event_bus()
-    await bus.publish(
-        CHANNEL_UPLOAD_RESOLVED,
-        {
-            "upload_id": upload.id,
-            "filename": upload.original_filename,
-            "status": "rejected",
-            "by": admin.discord_username,
-        },
-    )
 
     return _upload_to_out(upload)
 

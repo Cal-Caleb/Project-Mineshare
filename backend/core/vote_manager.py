@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -6,6 +7,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
+from core.events import (
+    CHANNEL_VOTE_CAST,
+    CHANNEL_VOTE_CREATED,
+    CHANNEL_VOTE_RESOLVED,
+    get_event_bus,
+)
 from models import (
     AuditLog,
     EventSource,
@@ -20,6 +27,19 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _publish(channel: str, data: dict) -> None:
+    """Best-effort fire-and-forget publish from sync context."""
+    try:
+        bus = get_event_bus()
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(bus.publish(channel, data))
+        except RuntimeError:
+            asyncio.run(bus.publish(channel, data))
+    except Exception:
+        logger.exception("Failed to publish %s", channel)
 
 
 class VoteManager:
@@ -76,6 +96,25 @@ class VoteManager:
         )
         db.commit()
         db.refresh(vote)
+
+        _publish(
+            CHANNEL_VOTE_CREATED,
+            {
+                "vote_id": vote.id,
+                "mod_id": mod.id,
+                "mod_name": mod.name,
+                "mod_description": mod.description or "",
+                "mod_author": mod.author or "Unknown",
+                "mod_source": mod.source.value,
+                "vote_type": vote_type.value,
+                "initiated_by": user.discord_username,
+                "expires_at": vote.expires_at.isoformat(),
+                "source": source.value,
+                # If already posted by the triggering Discord command, the bot
+                # will skip re-posting based on presence of these fields.
+                "has_discord_message": False,
+            },
+        )
         return vote
 
     # ── Cast ─────────────────────────────────────────────────────────
@@ -117,6 +156,7 @@ class VoteManager:
             )
             db.commit()
             db.refresh(existing)
+            self._broadcast_cast(db, vote, user, in_favor)
             return existing
 
         ballot = VoteBallot(
@@ -135,7 +175,24 @@ class VoteManager:
         )
         db.commit()
         db.refresh(ballot)
+        self._broadcast_cast(db, vote, user, in_favor)
         return ballot
+
+    def _broadcast_cast(
+        self, db: Session, vote: Vote, user: User, in_favor: bool
+    ) -> None:
+        tally = self.get_tally(db, vote)
+        _publish(
+            CHANNEL_VOTE_CAST,
+            {
+                "vote_id": vote.id,
+                "mod_name": vote.mod.name,
+                "user": user.discord_username,
+                "in_favor": in_favor,
+                "tally": tally,
+                "status": vote.status.value,
+            },
+        )
 
     # ── Admin Actions ────────────────────────────────────────────────
 
@@ -166,6 +223,7 @@ class VoteManager:
         )
         db.commit()
         db.refresh(vote)
+        self._broadcast_resolved(db, vote, admin.discord_username)
         return vote
 
     def force_pass(
@@ -196,7 +254,26 @@ class VoteManager:
         )
         db.commit()
         db.refresh(vote)
+        self._broadcast_resolved(db, vote, admin.discord_username)
         return vote
+
+    def _broadcast_resolved(
+        self, db: Session, vote: Vote, by: str | None = None
+    ) -> None:
+        tally = self.get_tally(db, vote)
+        _publish(
+            CHANNEL_VOTE_RESOLVED,
+            {
+                "vote_id": vote.id,
+                "mod_id": vote.mod.id,
+                "mod_name": vote.mod.name,
+                "status": vote.status.value,
+                "tally": tally,
+                "by": by,
+                "discord_message_id": vote.discord_message_id,
+                "discord_channel_id": vote.discord_channel_id,
+            },
+        )
 
     # ── Expiration ───────────────────────────────────────────────────
 
@@ -214,6 +291,8 @@ class VoteManager:
             expired.append(vote)
         if expired:
             db.commit()
+            for vote in expired:
+                self._broadcast_resolved(db, vote)
         return expired
 
     # ── Tallies ──────────────────────────────────────────────────────

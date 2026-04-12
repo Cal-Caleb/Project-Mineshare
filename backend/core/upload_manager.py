@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 import shutil
@@ -9,6 +10,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
+from core.events import CHANNEL_UPLOAD_RESOLVED, get_event_bus
 from models import (
     AuditLog,
     EventSource,
@@ -23,6 +25,18 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _publish(channel: str, data: dict) -> None:
+    try:
+        bus = get_event_bus()
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(bus.publish(channel, data))
+        except RuntimeError:
+            asyncio.run(bus.publish(channel, data))
+    except Exception:
+        logger.exception("Failed to publish %s", channel)
 
 
 class UploadManager:
@@ -153,6 +167,20 @@ class UploadManager:
         db.commit()
         db.refresh(mod)
 
+        _publish(
+            CHANNEL_UPLOAD_RESOLVED,
+            {
+                "upload_id": upload.id,
+                "filename": upload.original_filename,
+                "status": "approved",
+                "by": admin.discord_username,
+                "is_update": False,
+                "mod_id": mod.id,
+                "discord_message_id": upload.discord_message_id,
+                "discord_channel_id": upload.discord_channel_id,
+            },
+        )
+
         # Create a community vote for the uploaded mod
         from core.vote_manager import VoteManager
         vote_mgr = VoteManager()
@@ -210,6 +238,21 @@ class UploadManager:
         )
         db.commit()
         db.refresh(mod)
+
+        _publish(
+            CHANNEL_UPLOAD_RESOLVED,
+            {
+                "upload_id": upload.id,
+                "filename": upload.original_filename,
+                "status": "approved",
+                "by": admin.discord_username,
+                "is_update": True,
+                "mod_id": mod.id,
+                "mod_name": mod.name,
+                "discord_message_id": upload.discord_message_id,
+                "discord_channel_id": upload.discord_channel_id,
+            },
+        )
         return mod
 
     def reject_upload(
@@ -237,6 +280,20 @@ class UploadManager:
             )
         )
         db.commit()
+
+        _publish(
+            CHANNEL_UPLOAD_RESOLVED,
+            {
+                "upload_id": upload.id,
+                "filename": upload.original_filename,
+                "status": "rejected",
+                "by": admin.discord_username,
+                "is_update": upload.mod_id is not None,
+                "reason": reason,
+                "discord_message_id": upload.discord_message_id,
+                "discord_channel_id": upload.discord_channel_id,
+            },
+        )
 
     def get_pending_uploads(self, db: Session) -> list[ModUpload]:
         return (

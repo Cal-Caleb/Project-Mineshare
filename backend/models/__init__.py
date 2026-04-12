@@ -26,6 +26,7 @@ def _utcnow() -> datetime:
 
 
 class UserRole(str, enum.Enum):
+    GUEST = "guest"
     MEMBER = "member"
     ADMIN = "admin"
 
@@ -236,6 +237,8 @@ class ModUpload(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    discord_message_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discord_channel_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     mod: Mapped["Mod | None"] = relationship(back_populates="uploads")
     uploaded_by_user: Mapped["User"] = relationship(

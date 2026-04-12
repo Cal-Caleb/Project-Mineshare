@@ -9,11 +9,6 @@ from api.deps import (
 )
 from api.schemas import BallotOut, CastBallot, UserOut, VoteOut, VoteTally
 from core.database import get_db
-from core.events import (
-    CHANNEL_VOTE_CAST,
-    CHANNEL_VOTE_RESOLVED,
-    get_event_bus,
-)
 from core.vote_manager import VoteManager
 from models import EventSource, User, Vote, VoteStatus
 
@@ -77,28 +72,6 @@ async def cast_ballot(
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    bus = get_event_bus()
-    await bus.publish(
-        CHANNEL_VOTE_CAST,
-        {
-            "vote_id": vote.id,
-            "mod_name": vote.mod.name,
-            "user": user.discord_username,
-            "in_favor": body.in_favor,
-            "status": vote.status.value,
-        },
-    )
-
-    if vote.status != VoteStatus.PENDING:
-        await bus.publish(
-            CHANNEL_VOTE_RESOLVED,
-            {
-                "vote_id": vote.id,
-                "mod_name": vote.mod.name,
-                "status": vote.status.value,
-            },
-        )
-
     return _vote_to_out(db, vote, vote_mgr)
 
 
@@ -118,17 +91,6 @@ async def veto_vote(
     except (ValueError, PermissionError) as e:
         raise HTTPException(400, str(e))
 
-    bus = get_event_bus()
-    await bus.publish(
-        CHANNEL_VOTE_RESOLVED,
-        {
-            "vote_id": vote.id,
-            "mod_name": vote.mod.name,
-            "status": "vetoed",
-            "by": admin.discord_username,
-        },
-    )
-
     return _vote_to_out(db, vote, vote_mgr)
 
 
@@ -147,17 +109,6 @@ async def force_pass_vote(
         vote_mgr.force_pass(db, vote, admin)
     except (ValueError, PermissionError) as e:
         raise HTTPException(400, str(e))
-
-    bus = get_event_bus()
-    await bus.publish(
-        CHANNEL_VOTE_RESOLVED,
-        {
-            "vote_id": vote.id,
-            "mod_name": vote.mod.name,
-            "status": "force_approved",
-            "by": admin.discord_username,
-        },
-    )
 
     return _vote_to_out(db, vote, vote_mgr)
 

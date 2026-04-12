@@ -38,3 +38,4 @@ backend/opt/minecraft
 backups/
 
 backend/.env
+backend/.env
