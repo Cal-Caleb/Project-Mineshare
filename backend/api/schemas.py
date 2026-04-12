@@ -46,6 +46,8 @@ class CurseForgePreview(BaseModel):
     logo_url: Optional[str] = None
     latest_file_name: Optional[str] = None
     download_count: int
+    supports_neoforge: bool = False
+    game_versions: list[str] = []
 
 
 class AddCurseForgeMod(BaseModel):

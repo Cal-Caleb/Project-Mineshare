@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # CurseForge
     curseforge_api_key: str = ""
     minecraft_game_id: int = 432
+    minecraft_version: str = ""  # e.g. "1.21.5" — auto-detected from server if empty
     neoforge_loader_type: int = 6  # NeoForge modloader type for CF API
 
     # Uploads

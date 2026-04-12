@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev fonts-dejavu fonts-liberation && \
+    gcc libpq-dev fonts-dejavu-core fonts-liberation && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

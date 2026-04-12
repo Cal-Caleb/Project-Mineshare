@@ -68,6 +68,8 @@ async def preview_curseforge(
         logo_url=info.logo_url,
         latest_file_name=info.latest_file_name,
         download_count=info.download_count,
+        supports_neoforge=info.supports_neoforge,
+        game_versions=info.game_versions,
     )
 
 
