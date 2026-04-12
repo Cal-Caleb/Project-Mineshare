@@ -79,7 +79,15 @@ def vote_embed(
         else (mod_description or "*No description provided.*")
     )
 
-    embed = discord.Embed(description=description, color=color)
+    if vote_type == "remove":
+        type_label = "🗑  **VOTE TO REMOVE**"
+    else:
+        type_label = "🆕  **VOTE TO ADD**"
+
+    embed = discord.Embed(
+        description=f"{type_label}\n\n{description}",
+        color=color,
+    )
     if image_filename:
         embed.set_image(url=f"attachment://{image_filename}")
 
@@ -170,4 +178,37 @@ def server_status_embed(
 
     embed.set_footer(text=f"⛏  {BRAND}")
     embed.timestamp = last_checked
+    return embed
+
+
+# ── Mod catalogue card embed ──────────────────────────────────────────
+
+def mod_card_embed(
+    *,
+    mod_name: str,
+    description: str | None,
+    source: str,
+    source_url: str | None,
+    added_by: str | None,
+    image_filename: str | None = None,
+) -> discord.Embed:
+    desc = (
+        (description[:200] + "…")
+        if (description and len(description) > 200)
+        else (description or "")
+    )
+    embed = discord.Embed(description=desc, color=GOLD)
+    if image_filename:
+        embed.set_image(url=f"attachment://{image_filename}")
+    embed.add_field(name="Source", value=source.title(), inline=True)
+    if added_by:
+        embed.add_field(name="Added by", value=added_by, inline=True)
+    if source_url:
+        embed.add_field(
+            name="Link",
+            value=f"[CurseForge]({source_url})",
+            inline=True,
+        )
+    embed.set_footer(text=f"⛏  {BRAND}")
+    embed.timestamp = datetime.now(timezone.utc)
     return embed

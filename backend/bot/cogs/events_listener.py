@@ -18,11 +18,14 @@ import discord
 from discord.ext import commands, tasks
 
 from bot import images as banner
-from bot.theme import server_status_embed, upload_embed, vote_embed
-from bot.views import UploadApprovalView, VoteView
+from bot.theme import mod_card_embed, server_status_embed, upload_embed, vote_embed
+from bot.views import RemoveModView, UploadApprovalView, VoteView
 from core.config import get_settings
 from core.database import SessionLocal
 from core.events import (
+    CHANNEL_MOD_ADDED,
+    CHANNEL_MOD_REMOVED,
+    CHANNEL_MOD_UPDATED,
     CHANNEL_SERVER_STATUS,
     CHANNEL_SERVER_UPDATE,
     CHANNEL_UPLOAD_PENDING,
@@ -130,6 +133,9 @@ class EventsListenerCog(commands.Cog):
             CHANNEL_UPLOAD_PENDING,
             CHANNEL_UPLOAD_RESOLVED,
             CHANNEL_SERVER_UPDATE,
+            CHANNEL_MOD_ADDED,
+            CHANNEL_MOD_REMOVED,
+            CHANNEL_MOD_UPDATED,
         ]
         try:
             async for event in bus.subscribe(*channels):
@@ -142,10 +148,18 @@ class EventsListenerCog(commands.Cog):
                         CHANNEL_VOTE_RESOLVED,
                     ):
                         await self.sync_votes()
+                        if ch == CHANNEL_VOTE_RESOLVED:
+                            await self.sync_mod_list()
                     elif ch in (CHANNEL_UPLOAD_PENDING, CHANNEL_UPLOAD_RESOLVED):
                         await self.sync_uploads()
                     elif ch == CHANNEL_SERVER_UPDATE:
                         await self.refresh_status()
+                    elif ch in (
+                        CHANNEL_MOD_ADDED,
+                        CHANNEL_MOD_REMOVED,
+                        CHANNEL_MOD_UPDATED,
+                    ):
+                        await self.sync_mod_list()
                 except Exception:
                     logger.exception("Failed handling event %s: %s", ch, data)
         except asyncio.CancelledError:
@@ -174,6 +188,7 @@ class EventsListenerCog(commands.Cog):
             for name, fn in (
                 ("sync_votes", self.sync_votes),
                 ("sync_uploads", self.sync_uploads),
+                ("sync_mod_list", self.sync_mod_list),
                 ("refresh_status", self.refresh_status),
             ):
                 try:
@@ -387,6 +402,88 @@ class EventsListenerCog(commands.Cog):
                     msg = await channel.send(embed=embed, view=view, file=file)
                     u.discord_message_id = str(msg.id)
                     u.discord_channel_id = str(msg.channel.id)
+                    db.commit()
+        finally:
+            db.close()
+
+    # ── Mod catalogue sync ─────────────────────────────────────────
+
+    async def sync_mod_list(self) -> None:
+        channel = await self._get_channel("channel_mod_proposals")
+        if channel is None:
+            logger.warning("sync_mod_list: channel_mod_proposals not configured")
+            return
+
+        db = SessionLocal()
+        try:
+            active = (
+                db.query(Mod)
+                .filter(Mod.status == ModStatus.ACTIVE)
+                .order_by(Mod.name.asc())
+                .all()
+            )
+            logger.info("sync_mod_list: %d active mods in DB", len(active))
+
+            # Build set of tracked message IDs for active mods
+            tracked_msg_ids: set[int] = set()
+            for m in active:
+                if m.discord_message_id and m.discord_channel_id == str(channel.id):
+                    try:
+                        tracked_msg_ids.add(int(m.discord_message_id))
+                    except ValueError:
+                        pass
+
+            # Sweep: delete bot messages that no longer match an active mod
+            try:
+                async for msg in channel.history(limit=500):
+                    if msg.author.id != self.bot.user.id:
+                        continue
+                    if msg.id in tracked_msg_ids:
+                        continue
+                    await self._safe_delete(msg)
+            except discord.Forbidden:
+                logger.warning("Missing read history permission in mod-list channel")
+
+            # Upsert a message per active mod
+            for m in active:
+                img_name = f"mod_{m.id}.png"
+                png = banner.mod_card_banner(
+                    mod_name=m.name,
+                    author=m.author,
+                    source=m.source.value if m.source else "unknown",
+                    version=m.current_version,
+                )
+                file = discord.File(io.BytesIO(png), filename=img_name)
+
+                embed = mod_card_embed(
+                    mod_name=m.name,
+                    description=m.description,
+                    source=m.source.value if m.source else "unknown",
+                    source_url=m.source_url,
+                    added_by=m.added_by_user.discord_username
+                    if m.added_by_user
+                    else None,
+                    image_filename=img_name,
+                )
+                view = RemoveModView(m.id)
+
+                existing = await self._safe_fetch_message(
+                    channel, m.discord_message_id
+                ) if m.discord_channel_id == str(channel.id) else None
+
+                if existing:
+                    try:
+                        await existing.edit(
+                            embed=embed, view=view, attachments=[file]
+                        )
+                    except discord.HTTPException:
+                        existing = None
+                        file = discord.File(io.BytesIO(png), filename=img_name)
+
+                if not existing:
+                    msg = await channel.send(embed=embed, view=view, file=file)
+                    m.discord_message_id = str(msg.id)
+                    m.discord_channel_id = str(msg.channel.id)
                     db.commit()
         finally:
             db.close()

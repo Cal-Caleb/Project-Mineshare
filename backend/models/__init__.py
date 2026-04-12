@@ -150,6 +150,8 @@ class Mod(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow
     )
+    discord_message_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discord_channel_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     added_by_user: Mapped["User"] = relationship(
         back_populates="mods_added", foreign_keys=[added_by_id]

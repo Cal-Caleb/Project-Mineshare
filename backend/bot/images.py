@@ -291,3 +291,47 @@ def status_banner(
         )
 
     return _to_png_bytes(img)
+
+
+# ── Mod catalogue card ────────────────────────────────────────────────
+
+MOD_CARD_W = 1100
+MOD_CARD_H = 180
+
+
+def mod_card_banner(
+    *,
+    mod_name: str,
+    author: str | None,
+    source: str,
+    version: str | None,
+) -> bytes:
+    """Smaller banner for a single mod in the catalogue channel."""
+    img = _starfield(seed=hash(mod_name) & 0xFFFFFFFF)
+    # Crop to shorter height
+    img = img.crop((0, 0, MOD_CARD_W, MOD_CARD_H))
+    _draw_border(img, GOLD)
+    draw = ImageDraw.Draw(img)
+
+    title_font = _font(FONT_CANDIDATES_SERIF, 48)
+    sub_font = _font(FONT_CANDIDATES_MONO, 20)
+    tag_font = _font(FONT_CANDIDATES_MONO, 16)
+
+    # Mod name
+    title = _truncate(mod_name, title_font, MOD_CARD_W - 120)
+    _draw_text_centered(draw, 28, title, title_font, (255, 255, 255))
+
+    # Author line
+    if author:
+        author_text = _truncate(f"by {author}", sub_font, MOD_CARD_W - 120)
+        _draw_text_centered(draw, 90, author_text, sub_font, GOLD_LIGHT)
+
+    # Source + version tags at bottom
+    tags = source.upper()
+    if version:
+        v_short = version[:40]
+        tags += f"  ·  {v_short}"
+    tags = _truncate(tags, tag_font, MOD_CARD_W - 120)
+    _draw_text_centered(draw, MOD_CARD_H - 40, tags, tag_font, (180, 180, 200))
+
+    return _to_png_bytes(img)

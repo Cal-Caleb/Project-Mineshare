@@ -31,6 +31,9 @@ def _apply_lightweight_migrations() -> None:
         "ALTER TABLE votes ADD COLUMN IF NOT EXISTS discord_channel_id VARCHAR(20)",
         # Add GUEST to userrole enum if it isn't there yet
         "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'GUEST'",
+        # Mod catalogue channel tracking
+        "ALTER TABLE mods ADD COLUMN IF NOT EXISTS discord_message_id VARCHAR(20)",
+        "ALTER TABLE mods ADD COLUMN IF NOT EXISTS discord_channel_id VARCHAR(20)",
     ]
     with engine.begin() as conn:
         for stmt in alters:

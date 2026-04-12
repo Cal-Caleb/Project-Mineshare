@@ -220,6 +220,67 @@ class AdminVoteView(discord.ui.View):
             db.close()
 
 
+class RemoveModView(discord.ui.View):
+    """Button on a mod-list card to start a removal vote."""
+
+    def __init__(self, mod_id: int):
+        super().__init__(timeout=None)
+        self.mod_id = mod_id
+
+    @discord.ui.button(
+        label="Vote to Remove",
+        style=discord.ButtonStyle.danger,
+        custom_id="mod_remove_vote",
+        emoji="\U0001f5d1",
+    )
+    async def vote_remove(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        from models import Mod, ModStatus, VoteType
+
+        db = SessionLocal()
+        try:
+            user = _get_user(db, interaction.user.id)
+            if not user:
+                await interaction.response.send_message(
+                    "Register on the web app first.", ephemeral=True
+                )
+                return
+            if not user.mc_username:
+                await interaction.response.send_message(
+                    "Set your Minecraft username first (`/setmc`).",
+                    ephemeral=True,
+                )
+                return
+
+            mod = db.query(Mod).filter(Mod.id == self.mod_id).first()
+            if not mod or mod.status != ModStatus.ACTIVE:
+                await interaction.response.send_message(
+                    "Mod not found or already removed.", ephemeral=True
+                )
+                return
+
+            mgr = VoteManager()
+            try:
+                mgr.create_vote(
+                    db,
+                    mod,
+                    VoteType.REMOVE,
+                    user,
+                    source=EventSource.DISCORD,
+                )
+            except (ValueError, PermissionError) as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+
+            await interaction.response.send_message(
+                f"🗳️ Removal vote started for **{mod.name}** — check the votes channel.",
+                ephemeral=True,
+            )
+        finally:
+            db.close()
+
+
 class UploadApprovalView(discord.ui.View):
     """Admin approval/rejection buttons for uploaded mods."""
 
