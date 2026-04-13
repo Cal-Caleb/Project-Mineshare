@@ -5,15 +5,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from sqlalchemy import text
 
+import models  # noqa: F401 — register all models with Base
 from api.routes import audit, auth, mods, server, sse, uploads, users, votes
 from core.config import get_settings
 from core.database import Base, engine
 from core.events import get_event_bus
 from core.scheduler import start_scheduler, stop_scheduler
-import models  # noqa: F401 — register all models with Base
 
 logging.basicConfig(
     level=logging.INFO,

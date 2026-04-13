@@ -1,8 +1,6 @@
 """Discord bot entry point and setup."""
 
 import logging
-import os
-import sys
 
 import discord
 from discord.ext import commands

@@ -7,8 +7,8 @@ they were rendered by the web app.
 from __future__ import annotations
 
 import io
-import math
 import random
+from datetime import UTC
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -46,6 +46,7 @@ def _font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
 
 
 # ── Background painter ────────────────────────────────────────────────
+
 
 def _starfield(seed: int) -> Image.Image:
     """Vertical gradient + scattered star dots, deterministic per seed."""
@@ -91,14 +92,10 @@ def _draw_border(img: Image.Image, accent: tuple[int, int, int]) -> None:
     # Outer thin gold rule
     draw.rectangle([(0, 0), (WIDTH - 1, HEIGHT - 1)], outline=GOLD, width=2)
     # Inner accent rule
-    draw.rectangle(
-        [(8, 8), (WIDTH - 9, HEIGHT - 9)], outline=accent, width=1
-    )
+    draw.rectangle([(8, 8), (WIDTH - 9, HEIGHT - 9)], outline=accent, width=1)
     # Corner ticks
     tick = 18
-    for (x, y) in [
-        (12, 12), (WIDTH - 13, 12), (12, HEIGHT - 13), (WIDTH - 13, HEIGHT - 13)
-    ]:
+    for x, y in [(12, 12), (WIDTH - 13, 12), (12, HEIGHT - 13), (WIDTH - 13, HEIGHT - 13)]:
         dx = tick if x < WIDTH / 2 else -tick
         dy = tick if y < HEIGHT / 2 else -tick
         draw.line([(x, y), (x + dx, y)], fill=GOLD_LIGHT, width=2)
@@ -132,6 +129,7 @@ def _to_png_bytes(img: Image.Image) -> bytes:
 
 # ── Public banner builders ────────────────────────────────────────────
 
+
 def vote_banner(
     *,
     vote_type: str,
@@ -150,7 +148,7 @@ def vote_banner(
     sub_font = _font(FONT_CANDIDATES_MONO, 22)
     bar_font = _font(FONT_CANDIDATES_MONO, 26)
 
-    label = ("VOTE TO ADD" if vote_type == "add" else "VOTE TO REMOVE")
+    label = "VOTE TO ADD" if vote_type == "add" else "VOTE TO REMOVE"
     _draw_text_centered(draw, 36, label, label_font, GOLD_LIGHT)
 
     title = _truncate(mod_name, title_font, WIDTH - 120)
@@ -224,9 +222,7 @@ def upload_banner(
     headline = _truncate(headline, title_font, WIDTH - 120)
     _draw_text_centered(draw, 84, headline, title_font, (255, 255, 255))
 
-    sub_text = (
-        f"updated · {filename}" if is_update else f"awaiting admin approval"
-    )
+    sub_text = f"updated · {filename}" if is_update else "awaiting admin approval"
     sub_text = _truncate(sub_text, sub_font, WIDTH - 120)
     _draw_text_centered(draw, 168, sub_text, sub_font, (255, 255, 255, 160))
 
@@ -273,7 +269,7 @@ def _draw_border_sized(img: Image.Image, accent: tuple[int, int, int]) -> None:
     draw.rectangle([(0, 0), (w - 1, h - 1)], outline=GOLD, width=2)
     draw.rectangle([(8, 8), (w - 9, h - 9)], outline=accent, width=1)
     tick = 18
-    for (x, y) in [(12, 12), (w - 13, 12), (12, h - 13), (w - 13, h - 13)]:
+    for x, y in [(12, 12), (w - 13, 12), (12, h - 13), (w - 13, h - 13)]:
         dx = tick if x < w / 2 else -tick
         dy = tick if y < h / 2 else -tick
         draw.line([(x, y), (x + dx, y)], fill=GOLD_LIGHT, width=2)
@@ -301,12 +297,12 @@ def status_banner(
     section_font = _font(FONT_CANDIDATES_MONO, 12)
     tiny_font = _font(FONT_CANDIDATES_MONO, 11)
 
-    # ── Header (y 20–100) ──
+    # -- Header (y 20-100) --
     _draw_text_centered(draw, 20, "MINESHARE SERVER", label_font, GOLD_LIGHT)
     title = "ONLINE" if online else "OFFLINE"
     _draw_text_centered(draw, 48, title, title_font, accent)
 
-    # ── Stat tiles (y 110–166) ──
+    # -- Stat tiles (y 110-166) --
     tiles = [
         ("PLAYERS", str(player_count) if online else "—"),
         ("MODS", str(active_mods)),
@@ -337,7 +333,7 @@ def status_banner(
     bar_right = WIDTH - 60
     bar_w = bar_right - bar_left
 
-    # ── Uptime bar (y 185–215) ──
+    # -- Uptime bar (y 185-215) --
     bar_y = 185
     bar_h = 20
 
@@ -375,7 +371,7 @@ def status_banner(
     nw = tiny_font.getlength("now")
     draw.text((bar_right - nw, bar_y + bar_h + 2), "now", font=tiny_font, fill=(100, 100, 120))
 
-    # ── Player count graph (y 228–378) ──
+    # -- Player count graph (y 228-378) --
     graph_y = 228
     graph_h = 120
     graph_left = 60
@@ -409,7 +405,8 @@ def status_banner(
             points.append((x, y))
 
         if len(points) >= 2:
-            fill_points = list(points) + [
+            fill_points = [
+                *points,
                 (graph_right, graph_y + graph_h),
                 (graph_left, graph_y + graph_h),
             ]
@@ -427,7 +424,7 @@ def status_banner(
     nw2 = tiny_font.getlength("now")
     draw.text((graph_right - nw2, graph_y + graph_h + 2), "now", font=tiny_font, fill=(100, 100, 120))
 
-    # ── Daily uptime bars (y 370–420) ──
+    # -- Daily uptime bars (y 370-420) --
     daily_y = 370
     draw.text((bar_left, daily_y), "DAILY UPTIME (LAST 7 DAYS)", font=section_font, fill=GOLD_LIGHT)
     if buckets:
@@ -441,7 +438,7 @@ def status_banner(
         for d in range(days_to_show):
             start_idx = n - (days_to_show - d) * bpd
             end_idx = start_idx + bpd
-            day_buckets = buckets[max(0, start_idx):min(n, end_idx)]
+            day_buckets = buckets[max(0, start_idx) : min(n, end_idx)]
 
             known = [b for b in day_buckets if b.get("online") is not None]
             pct = (100 * sum(1 for b in known if b["online"]) / len(known)) if known else 0
@@ -555,8 +552,9 @@ def update_log_banner(
 
     # Timestamp
     ts_font = _font(FONT_CANDIDATES_MONO, 14)
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    from datetime import datetime
+
+    ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     _draw_text_centered(draw, HEIGHT - 40, ts, ts_font, (120, 120, 140))
 
     return _to_png_bytes(img)

@@ -1,7 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -27,6 +26,7 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+_background_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
 
 
 def _publish(channel: str, data: dict) -> None:
@@ -35,7 +35,9 @@ def _publish(channel: str, data: dict) -> None:
         bus = get_event_bus()
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(bus.publish(channel, data))
+            task = loop.create_task(bus.publish(channel, data))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
         except RuntimeError:
             asyncio.run(bus.publish(channel, data))
     except Exception:
@@ -70,13 +72,10 @@ class VoteManager:
             raise ValueError(f"An active vote already exists for '{mod.name}'")
 
         # Removal votes can only be started by the original adder or admin
-        if vote_type == VoteType.REMOVE:
-            if mod.added_by_id != user.id and user.role != UserRole.ADMIN:
-                raise PermissionError(
-                    "Only the original adder or an admin can initiate removal"
-                )
+        if vote_type == VoteType.REMOVE and mod.added_by_id != user.id and user.role != UserRole.ADMIN:
+            raise PermissionError("Only the original adder or an admin can initiate removal")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         vote = Vote(
             mod_id=mod.id,
             vote_type=vote_type,
@@ -130,22 +129,18 @@ class VoteManager:
         if vote.status != VoteStatus.PENDING:
             raise ValueError("This vote is no longer active")
 
-        expires_at = vote.expires_at.replace(tzinfo=timezone.utc) if vote.expires_at.tzinfo is None else vote.expires_at
-        if datetime.now(timezone.utc) > expires_at:
+        expires_at = vote.expires_at.replace(tzinfo=UTC) if vote.expires_at.tzinfo is None else vote.expires_at
+        if datetime.now(UTC) > expires_at:
             self._expire_vote(db, vote)
             raise ValueError("This vote has expired")
 
         # DB unique constraint prevents double-voting; catch it gracefully
-        existing = (
-            db.query(VoteBallot)
-            .filter(VoteBallot.vote_id == vote.id, VoteBallot.user_id == user.id)
-            .first()
-        )
+        existing = db.query(VoteBallot).filter(VoteBallot.vote_id == vote.id, VoteBallot.user_id == user.id).first()
         if existing:
             if existing.in_favor == in_favor:
                 raise ValueError("You have already voted this way")
             existing.in_favor = in_favor
-            existing.cast_at = datetime.now(timezone.utc)
+            existing.cast_at = datetime.now(UTC)
             db.add(
                 AuditLog(
                     user_id=user.id,
@@ -178,9 +173,7 @@ class VoteManager:
         self._broadcast_cast(db, vote, user, in_favor)
         return ballot
 
-    def _broadcast_cast(
-        self, db: Session, vote: Vote, user: User, in_favor: bool
-    ) -> None:
+    def _broadcast_cast(self, db: Session, vote: Vote, user: User, in_favor: bool) -> None:
         tally = self.get_tally(db, vote)
         _publish(
             CHANNEL_VOTE_CAST,
@@ -209,7 +202,7 @@ class VoteManager:
             raise ValueError("This vote is no longer active")
 
         vote.status = VoteStatus.VETOED
-        vote.resolved_at = datetime.now(timezone.utc)
+        vote.resolved_at = datetime.now(UTC)
         vote.resolved_by_id = admin.id
         self._apply_rejection(db, vote)
 
@@ -239,7 +232,7 @@ class VoteManager:
             raise ValueError("This vote is no longer active")
 
         vote.status = VoteStatus.FORCE_APPROVED
-        vote.resolved_at = datetime.now(timezone.utc)
+        vote.resolved_at = datetime.now(UTC)
         vote.resolved_by_id = admin.id
 
         self._apply_result(db, vote)
@@ -257,9 +250,7 @@ class VoteManager:
         self._broadcast_resolved(db, vote, admin.discord_username)
         return vote
 
-    def _broadcast_resolved(
-        self, db: Session, vote: Vote, by: str | None = None
-    ) -> None:
+    def _broadcast_resolved(self, db: Session, vote: Vote, by: str | None = None) -> None:
         tally = self.get_tally(db, vote)
         _publish(
             CHANNEL_VOTE_RESOLVED,
@@ -279,12 +270,8 @@ class VoteManager:
 
     def expire_stale_votes(self, db: Session) -> list[Vote]:
         """Find and expire all votes past their deadline."""
-        now = datetime.now(timezone.utc)
-        stale = (
-            db.query(Vote)
-            .filter(Vote.status == VoteStatus.PENDING, Vote.expires_at <= now)
-            .all()
-        )
+        now = datetime.now(UTC)
+        stale = db.query(Vote).filter(Vote.status == VoteStatus.PENDING, Vote.expires_at <= now).all()
         expired = []
         for vote in stale:
             self._expire_vote(db, vote)
@@ -298,16 +285,8 @@ class VoteManager:
     # ── Tallies ──────────────────────────────────────────────────────
 
     def get_tally(self, db: Session, vote: Vote) -> dict:
-        yes = (
-            db.query(func.count())
-            .filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(True))
-            .scalar()
-        )
-        no = (
-            db.query(func.count())
-            .filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(False))
-            .scalar()
-        )
+        yes = db.query(func.count()).filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(True)).scalar()
+        no = db.query(func.count()).filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(False)).scalar()
         return {"yes": yes, "no": no, "total": yes + no}
 
     def get_active_votes(self, db: Session) -> list[Vote]:
@@ -315,7 +294,6 @@ class VoteManager:
         return db.query(Vote).filter(Vote.status == VoteStatus.PENDING).all()
 
     # ── Internal ─────────────────────────────────────────────────────
-
 
     def _expire_vote(self, db: Session, vote: Vote) -> None:
         # On expiry: strict majority approves, otherwise rejected (ties = rejected)
@@ -326,7 +304,7 @@ class VoteManager:
         else:
             vote.status = VoteStatus.REJECTED
             self._apply_rejection(db, vote)
-        vote.resolved_at = datetime.now(timezone.utc)
+        vote.resolved_at = datetime.now(UTC)
 
     def _apply_result(self, db: Session, vote: Vote) -> None:
         """Apply the outcome of a successful vote to the mod."""

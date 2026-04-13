@@ -24,11 +24,7 @@ async def set_minecraft_username(
 ):
     """Set or update your Minecraft username. Required before any server interaction."""
     # Check uniqueness
-    existing = (
-        db.query(User)
-        .filter(User.mc_username == body.mc_username, User.id != user.id)
-        .first()
-    )
+    existing = db.query(User).filter(User.mc_username == body.mc_username, User.id != user.id).first()
     if existing:
         raise HTTPException(409, "That Minecraft username is already claimed")
 

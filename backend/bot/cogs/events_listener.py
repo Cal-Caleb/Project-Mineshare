@@ -10,11 +10,11 @@ Strategy:
 """
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
-import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import discord
@@ -35,7 +35,6 @@ from core.events import (
     CHANNEL_MOD_ADDED,
     CHANNEL_MOD_REMOVED,
     CHANNEL_MOD_UPDATED,
-    CHANNEL_SERVER_STATUS,
     CHANNEL_SERVER_UPDATE,
     CHANNEL_UPLOAD_PENDING,
     CHANNEL_UPLOAD_RESOLVED,
@@ -49,9 +48,7 @@ from core.vote_manager import VoteManager
 from core.whitelist_manager import WhitelistManager
 from models import (
     Mod,
-    ModSource,
     ModStatus,
-    ModUpdateLog,
     ModUpload,
     ServerHeartbeat,
     UploadStatus,
@@ -128,10 +125,8 @@ class EventsListenerCog(commands.Cog):
     async def _safe_delete(self, msg: discord.Message | None) -> None:
         if not msg:
             return
-        try:
+        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
             await msg.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
 
     # ── Live event subscription ──────────────────────────────────────
 
@@ -222,8 +217,11 @@ class EventsListenerCog(commands.Cog):
             if not (perms.send_messages and perms.embed_links and perms.read_message_history and perms.manage_messages):
                 logger.warning(
                     "sync_votes: bot lacks perms in #%s (send=%s embed=%s history=%s manage=%s)",
-                    channel.name, perms.send_messages, perms.embed_links,
-                    perms.read_message_history, perms.manage_messages,
+                    channel.name,
+                    perms.send_messages,
+                    perms.embed_links,
+                    perms.read_message_history,
+                    perms.manage_messages,
                 )
 
         db = SessionLocal()
@@ -231,12 +229,7 @@ class EventsListenerCog(commands.Cog):
             # 1. Expire stale votes first so we don't keep dead messages around
             VoteManager().expire_stale_votes(db)
 
-            pending = (
-                db.query(Vote)
-                .filter(Vote.status == VoteStatus.PENDING)
-                .order_by(Vote.created_at.asc())
-                .all()
-            )
+            pending = db.query(Vote).filter(Vote.status == VoteStatus.PENDING).order_by(Vote.created_at.asc()).all()
             logger.info("sync_votes: %d pending votes in DB", len(pending))
             pending_ids = {v.id for v in pending}
 
@@ -244,10 +237,8 @@ class EventsListenerCog(commands.Cog):
             tracked_msg_ids: set[int] = set()
             for v in pending:
                 if v.discord_message_id and v.discord_channel_id == str(channel.id):
-                    try:
+                    with contextlib.suppress(ValueError):
                         tracked_msg_ids.add(int(v.discord_message_id))
-                    except ValueError:
-                        pass
 
             try:
                 async for msg in channel.history(limit=200):
@@ -265,9 +256,7 @@ class EventsListenerCog(commands.Cog):
             for v in pending:
                 tally = vote_mgr.get_tally(db, v)
                 expires = (
-                    v.expires_at.replace(tzinfo=timezone.utc)
-                    if v.expires_at and v.expires_at.tzinfo is None
-                    else v.expires_at
+                    v.expires_at.replace(tzinfo=UTC) if v.expires_at and v.expires_at.tzinfo is None else v.expires_at
                 )
 
                 # Vary filename by tally so Discord CDN/clients refresh
@@ -287,25 +276,23 @@ class EventsListenerCog(commands.Cog):
                     mod_description=v.mod.description,
                     mod_author=v.mod.author,
                     mod_source=v.mod.source.value if v.mod.source else None,
-                    initiated_by=v.initiated_by_user.discord_username
-                    if v.initiated_by_user
-                    else "Unknown",
+                    initiated_by=v.initiated_by_user.discord_username if v.initiated_by_user else "Unknown",
                     expires_at=expires,
                     yes=tally["yes"],
                     no=tally["no"],
                     image_filename=img_name,
                 )
 
-                existing = await self._safe_fetch_message(
-                    channel, v.discord_message_id
-                ) if v.discord_channel_id == str(channel.id) else None
+                existing = (
+                    await self._safe_fetch_message(channel, v.discord_message_id)
+                    if v.discord_channel_id == str(channel.id)
+                    else None
+                )
 
                 view = VoteView(v.id)
                 if existing:
                     try:
-                        await existing.edit(
-                            embed=embed, view=view, attachments=[file]
-                        )
+                        await existing.edit(embed=embed, view=view, attachments=[file])
                     except discord.HTTPException:
                         existing = None
                         # Re-create the file because it was consumed
@@ -335,8 +322,11 @@ class EventsListenerCog(commands.Cog):
             if not (perms.send_messages and perms.embed_links and perms.read_message_history and perms.manage_messages):
                 logger.warning(
                     "sync_uploads: bot lacks perms in #%s (send=%s embed=%s history=%s manage=%s)",
-                    channel.name, perms.send_messages, perms.embed_links,
-                    perms.read_message_history, perms.manage_messages,
+                    channel.name,
+                    perms.send_messages,
+                    perms.embed_links,
+                    perms.read_message_history,
+                    perms.manage_messages,
                 )
 
         db = SessionLocal()
@@ -352,10 +342,8 @@ class EventsListenerCog(commands.Cog):
             tracked_msg_ids: set[int] = set()
             for u in pending:
                 if u.discord_message_id and u.discord_channel_id == str(channel.id):
-                    try:
+                    with contextlib.suppress(ValueError):
                         tracked_msg_ids.add(int(u.discord_message_id))
-                    except ValueError:
-                        pass
 
             try:
                 async for msg in channel.history(limit=200):
@@ -372,11 +360,7 @@ class EventsListenerCog(commands.Cog):
                 if u.mod_id:
                     linked_mod = db.query(Mod).filter(Mod.id == u.mod_id).first()
 
-                uploader = (
-                    u.uploaded_by_user.discord_username
-                    if u.uploaded_by_user
-                    else "Unknown"
-                )
+                uploader = u.uploaded_by_user.discord_username if u.uploaded_by_user else "Unknown"
                 img_name = f"upload_{u.id}.png"
                 png = banner.upload_banner(
                     filename=u.original_filename,
@@ -396,15 +380,15 @@ class EventsListenerCog(commands.Cog):
                 )
                 view = UploadApprovalView(u.id)
 
-                existing = await self._safe_fetch_message(
-                    channel, u.discord_message_id
-                ) if u.discord_channel_id == str(channel.id) else None
+                existing = (
+                    await self._safe_fetch_message(channel, u.discord_message_id)
+                    if u.discord_channel_id == str(channel.id)
+                    else None
+                )
 
                 if existing:
                     try:
-                        await existing.edit(
-                            embed=embed, view=view, attachments=[file]
-                        )
+                        await existing.edit(embed=embed, view=view, attachments=[file])
                     except discord.HTTPException:
                         existing = None
                         file = discord.File(io.BytesIO(png), filename=img_name)
@@ -427,22 +411,15 @@ class EventsListenerCog(commands.Cog):
 
         db = SessionLocal()
         try:
-            active = (
-                db.query(Mod)
-                .filter(Mod.status == ModStatus.ACTIVE)
-                .order_by(Mod.name.asc())
-                .all()
-            )
+            active = db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).order_by(Mod.name.asc()).all()
             logger.info("sync_mod_list: %d active mods in DB", len(active))
 
             # Build set of tracked message IDs for active mods
             tracked_msg_ids: set[int] = set()
             for m in active:
                 if m.discord_message_id and m.discord_channel_id == str(channel.id):
-                    try:
+                    with contextlib.suppress(ValueError):
                         tracked_msg_ids.add(int(m.discord_message_id))
-                    except ValueError:
-                        pass
 
             # Sweep: delete bot messages that no longer match an active mod
             try:
@@ -471,22 +448,20 @@ class EventsListenerCog(commands.Cog):
                     description=m.description,
                     source=m.source.value if m.source else "unknown",
                     source_url=m.source_url,
-                    added_by=m.added_by_user.discord_username
-                    if m.added_by_user
-                    else None,
+                    added_by=m.added_by_user.discord_username if m.added_by_user else None,
                     image_filename=img_name,
                 )
                 view = RemoveModView(m.id)
 
-                existing = await self._safe_fetch_message(
-                    channel, m.discord_message_id
-                ) if m.discord_channel_id == str(channel.id) else None
+                existing = (
+                    await self._safe_fetch_message(channel, m.discord_message_id)
+                    if m.discord_channel_id == str(channel.id)
+                    else None
+                )
 
                 if existing:
                     try:
-                        await existing.edit(
-                            embed=embed, view=view, attachments=[file]
-                        )
+                        await existing.edit(embed=embed, view=view, attachments=[file])
                     except discord.HTTPException:
                         existing = None
                         file = discord.File(io.BytesIO(png), filename=img_name)
@@ -519,31 +494,25 @@ class EventsListenerCog(commands.Cog):
         Returns a NAIVE datetime (no tzinfo) because PostgreSQL DateTime
         without timezone=True strips tz, and we need dict lookups to match.
         """
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
         return now.replace(minute=now.minute // 10 * 10, second=0, microsecond=0)
 
-    def _record_heartbeat(
-        self, db, *, online: bool, player_count: int
-    ) -> None:
+    def _record_heartbeat(self, db, *, online: bool, player_count: int) -> None:
         bucket = self._bucket_now()
-        existing = (
-            db.query(ServerHeartbeat)
-            .filter(ServerHeartbeat.bucket == bucket)
-            .first()
-        )
+        existing = db.query(ServerHeartbeat).filter(ServerHeartbeat.bucket == bucket).first()
         if existing:
             # If any check in the bucket saw online, keep it online
             if online:
                 existing.online = True
             existing.player_count = max(existing.player_count, player_count)
-            existing.checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            existing.checked_at = datetime.now(UTC).replace(tzinfo=None)
         else:
             db.add(
                 ServerHeartbeat(
                     bucket=bucket,
                     online=online,
                     player_count=player_count,
-                    checked_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    checked_at=datetime.now(UTC).replace(tzinfo=None),
                 )
             )
         db.commit()
@@ -554,7 +523,7 @@ class EventsListenerCog(commands.Cog):
 
         All datetimes are naive UTC to match what PostgreSQL stores.
         """
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
         cutoff = now - timedelta(hours=hours)
         rows = (
             db.query(ServerHeartbeat)
@@ -606,7 +575,9 @@ class EventsListenerCog(commands.Cog):
             if not (perms.send_messages and perms.embed_links and perms.read_message_history):
                 logger.warning(
                     "refresh_status: bot lacks perms in #%s (send=%s embed=%s history=%s)",
-                    channel.name, perms.send_messages, perms.embed_links,
+                    channel.name,
+                    perms.send_messages,
+                    perms.embed_links,
                     perms.read_message_history,
                 )
                 return
@@ -627,13 +598,9 @@ class EventsListenerCog(commands.Cog):
 
         db = SessionLocal()
         try:
-            active_mods = (
-                db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).count()
-            )
+            active_mods = db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).count()
             # Record heartbeat
-            self._record_heartbeat(
-                db, online=is_online, player_count=player_count
-            )
+            self._record_heartbeat(db, online=is_online, player_count=player_count)
             # Get uptime history for 30 days
             buckets = self._get_uptime_buckets(db, hours=720)
         finally:
@@ -660,7 +627,7 @@ class EventsListenerCog(commands.Cog):
         embed = server_status_embed(
             online=is_online,
             players=status.get("players", []),
-            last_checked=datetime.now(timezone.utc),
+            last_checked=datetime.now(UTC),
             active_mods=active_mods,
             uptime_pct=uptime_pct,
             world_size_mb=world_size_mb,
@@ -699,7 +666,6 @@ class EventsListenerCog(commands.Cog):
             await msg.edit(embed=embed, attachments=[_make_file()])
         except discord.HTTPException:
             logger.exception("Failed to edit status message")
-
 
     # ── Mod update channel ────────────────────────────────────────────
 
@@ -755,12 +721,7 @@ class EventsListenerCog(commands.Cog):
         """Send a text file listing all active mods."""
         db = SessionLocal()
         try:
-            active = (
-                db.query(Mod)
-                .filter(Mod.status == ModStatus.ACTIVE)
-                .order_by(Mod.name.asc())
-                .all()
-            )
+            active = db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).order_by(Mod.name.asc()).all()
 
             if not active:
                 await ctx.reply("No active mods on the server.")
@@ -814,9 +775,7 @@ class EventsListenerCog(commands.Cog):
     # ── Live Discord role sync ───────────────────────────────────────
 
     @commands.Cog.listener()
-    async def on_member_update(
-        self, before: discord.Member, after: discord.Member
-    ):
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
         if {r.id for r in before.roles} == {r.id for r in after.roles}:
             return
         await self._sync_member_roles(after)
@@ -829,9 +788,7 @@ class EventsListenerCog(commands.Cog):
     async def on_member_join(self, member: discord.Member):
         await self._sync_member_roles(member)
 
-    async def _sync_member_roles(
-        self, member: discord.Member, *, removed: bool = False
-    ) -> None:
+    async def _sync_member_roles(self, member: discord.Member, *, removed: bool = False) -> None:
         role1_id = self.settings.discord_role1_id
         role2_id = self.settings.discord_role2_id
         if not role1_id and not role2_id:
@@ -852,11 +809,7 @@ class EventsListenerCog(commands.Cog):
         def _apply() -> str | None:
             db = SessionLocal()
             try:
-                user = (
-                    db.query(User)
-                    .filter(User.discord_id == str(member.id))
-                    .first()
-                )
+                user = db.query(User).filter(User.discord_id == str(member.id)).first()
                 if not user:
                     return None
                 if user.role == new_role:

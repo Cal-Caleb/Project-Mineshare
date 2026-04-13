@@ -1,10 +1,9 @@
 """FastAPI dependencies for auth, DB sessions, and service managers."""
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from core.config import get_settings
 from core.database import get_db
 from core.mod_manager import ModManager
 from core.security import verify_access_token

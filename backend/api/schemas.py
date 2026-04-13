@@ -1,8 +1,6 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
-
 
 # ── Auth ─────────────────────────────────────────────────────────────
 
@@ -24,8 +22,8 @@ class UserOut(BaseModel):
     id: int
     discord_id: str
     discord_username: str
-    discord_avatar: Optional[str] = None
-    mc_username: Optional[str] = None
+    discord_avatar: str | None = None
+    mc_username: str | None = None
     role: str
     is_whitelisted: bool
     is_op: bool
@@ -43,8 +41,8 @@ class CurseForgePreview(BaseModel):
     slug: str
     summary: str
     author: str
-    logo_url: Optional[str] = None
-    latest_file_name: Optional[str] = None
+    logo_url: str | None = None
+    latest_file_name: str | None = None
     download_count: int
     supports_neoforge: bool = False
     game_versions: list[str] = []
@@ -58,17 +56,17 @@ class AddCurseForgeMod(BaseModel):
 class ModOut(BaseModel):
     id: int
     name: str
-    slug: Optional[str] = None
-    description: Optional[str] = None
-    author: Optional[str] = None
+    slug: str | None = None
+    description: str | None = None
+    author: str | None = None
     source: str
-    source_url: Optional[str] = None
-    curse_project_id: Optional[int] = None
-    current_version: Optional[str] = None
-    file_name: Optional[str] = None
+    source_url: str | None = None
+    curse_project_id: int | None = None
+    current_version: str | None = None
+    file_name: str | None = None
     status: str
     download_count: int
-    added_by: Optional[UserOut] = None
+    added_by: UserOut | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -106,12 +104,12 @@ class VoteOut(BaseModel):
     id: int
     mod: ModOut
     vote_type: str
-    initiated_by: Optional[UserOut] = None
+    initiated_by: UserOut | None = None
     status: str
     created_at: datetime
     expires_at: datetime
-    resolved_at: Optional[datetime] = None
-    tally: Optional[VoteTally] = None
+    resolved_at: datetime | None = None
+    tally: VoteTally | None = None
     ballots: list[BallotOut] = []
 
     model_config = {"from_attributes": True}
@@ -134,12 +132,12 @@ class UploadOut(BaseModel):
     file_hash: str
     file_size: int
     status: str
-    scan_result: Optional[str] = None
-    mod_id: Optional[int] = None
-    uploaded_by: Optional[UserOut] = None
-    approved_by: Optional[UserOut] = None
+    scan_result: str | None = None
+    mod_id: int | None = None
+    uploaded_by: UserOut | None = None
+    approved_by: UserOut | None = None
     created_at: datetime
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -149,9 +147,9 @@ class UploadOut(BaseModel):
 
 class AuditLogOut(BaseModel):
     id: int
-    user: Optional[UserOut] = None
+    user: UserOut | None = None
     action: str
-    details: Optional[str] = None
+    details: str | None = None
     source: str
     created_at: datetime
 
@@ -171,10 +169,10 @@ class ServerEventOut(BaseModel):
     id: int
     event_type: str
     status: str
-    details: Optional[str] = None
-    backup_path: Optional[str] = None
+    details: str | None = None
+    backup_path: str | None = None
     created_at: datetime
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -184,7 +182,7 @@ class ServerEventOut(BaseModel):
 
 class UptimeBucket(BaseModel):
     bucket: datetime
-    online: Optional[bool] = None
+    online: bool | None = None
     player_count: int = 0
 
 
@@ -193,7 +191,7 @@ class UptimeStats(BaseModel):
     buckets: list[UptimeBucket]
     peak_players: int
     avg_players: float
-    world_size_mb: Optional[float] = None
+    world_size_mb: float | None = None
 
 
 # ── Mod Updates ─────────────────────────────────────────────────────
@@ -203,11 +201,11 @@ class ModUpdateOut(BaseModel):
     id: int
     mod_id: int
     mod_name: str
-    mod_slug: Optional[str] = None
-    old_version: Optional[str] = None
-    new_version: Optional[str] = None
-    changelog: Optional[str] = None
-    source_url: Optional[str] = None
+    mod_slug: str | None = None
+    old_version: str | None = None
+    new_version: str | None = None
+    changelog: str | None = None
+    source_url: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -218,12 +216,12 @@ class ModUpdateOut(BaseModel):
 
 class ModExportEntry(BaseModel):
     name: str
-    author: Optional[str] = None
+    author: str | None = None
     source: str
-    curse_project_id: Optional[int] = None
-    file_name: Optional[str] = None
-    source_url: Optional[str] = None
-    current_version: Optional[str] = None
+    curse_project_id: int | None = None
+    file_name: str | None = None
+    source_url: str | None = None
+    current_version: str | None = None
 
 
 class ModExportOut(BaseModel):

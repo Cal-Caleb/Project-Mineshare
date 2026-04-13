@@ -2,10 +2,10 @@ import asyncio
 import io
 import json
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -25,11 +25,11 @@ from api.schemas import (
 )
 from core.config import get_settings
 from core.database import get_db
-from core.events import CHANNEL_SERVER_UPDATE, get_event_bus
 from core.scheduler import run_update_cycle
 from core.server_manager import ServerManager
 from models import Mod, ModStatus, ModUpdateLog, ServerEvent, ServerHeartbeat, User
 
+_background_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
 
 router = APIRouter(prefix="/server", tags=["server"])
 
@@ -52,14 +52,11 @@ async def get_uptime_stats(
     days = min(days, 90)
     hours = days * 24
     # Use naive UTC datetimes to match what PostgreSQL DateTime stores
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     cutoff = now - timedelta(hours=hours)
 
     rows = (
-        db.query(ServerHeartbeat)
-        .filter(ServerHeartbeat.bucket >= cutoff)
-        .order_by(ServerHeartbeat.bucket.asc())
-        .all()
+        db.query(ServerHeartbeat).filter(ServerHeartbeat.bucket >= cutoff).order_by(ServerHeartbeat.bucket.asc()).all()
     )
     # Strip tzinfo from DB values in case some have it
     lookup = {}
@@ -71,11 +68,13 @@ async def get_uptime_stats(
     b = cutoff.replace(minute=cutoff.minute // 10 * 10, second=0, microsecond=0)
     while b <= now:
         row = lookup.get(b)
-        buckets.append(UptimeBucket(
-            bucket=b,
-            online=row.online if row else None,
-            player_count=row.player_count if row else 0,
-        ))
+        buckets.append(
+            UptimeBucket(
+                bucket=b,
+                online=row.online if row else None,
+                player_count=row.player_count if row else 0,
+            )
+        )
         b += timedelta(minutes=10)
 
     known = [bk for bk in buckets if bk.online is not None]
@@ -116,26 +115,23 @@ async def get_mod_updates(
     _user: User = Depends(get_current_user),
 ):
     """Return recent mod update logs with changelogs."""
-    logs = (
-        db.query(ModUpdateLog)
-        .order_by(ModUpdateLog.created_at.desc())
-        .limit(min(limit, 200))
-        .all()
-    )
+    logs = db.query(ModUpdateLog).order_by(ModUpdateLog.created_at.desc()).limit(min(limit, 200)).all()
     result = []
     for log in logs:
         mod = log.mod
-        result.append(ModUpdateOut(
-            id=log.id,
-            mod_id=log.mod_id,
-            mod_name=mod.name if mod else "Unknown",
-            mod_slug=mod.slug if mod else None,
-            old_version=log.old_version,
-            new_version=log.new_version,
-            changelog=log.changelog,
-            source_url=mod.source_url if mod else None,
-            created_at=log.created_at,
-        ))
+        result.append(
+            ModUpdateOut(
+                id=log.id,
+                mod_id=log.mod_id,
+                mod_name=mod.name if mod else "Unknown",
+                mod_slug=mod.slug if mod else None,
+                old_version=log.old_version,
+                new_version=log.new_version,
+                changelog=log.changelog,
+                source_url=mod.source_url if mod else None,
+                created_at=log.created_at,
+            )
+        )
     return result
 
 
@@ -145,12 +141,7 @@ async def get_modpack_manifest(
     _user: User = Depends(get_current_user),
 ):
     """Return a JSON manifest of all active mods."""
-    active = (
-        db.query(Mod)
-        .filter(Mod.status == ModStatus.ACTIVE)
-        .order_by(Mod.name.asc())
-        .all()
-    )
+    active = db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).order_by(Mod.name.asc()).all()
     return ModExportOut(
         mod_count=len(active),
         mods=[
@@ -184,12 +175,7 @@ async def download_modpack(
     server_mods_dir = Path(settings.server_path) / "mods"
     cache_dir = Path(settings.mod_cache_dir)
 
-    active = (
-        db.query(Mod)
-        .filter(Mod.status == ModStatus.ACTIVE)
-        .order_by(Mod.name.asc())
-        .all()
-    )
+    active = db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).order_by(Mod.name.asc()).all()
 
     buf = io.BytesIO()
     included: list[dict] = []
@@ -221,17 +207,17 @@ async def download_modpack(
                 arc_name = f"mods/{jar_path.name}"
                 try:
                     zf.write(str(jar_path), arcname=arc_name)
-                    included.append({
-                        "name": m.name,
-                        "file": jar_path.name,
-                        "source": m.source.value if m.source else "unknown",
-                    })
+                    included.append(
+                        {
+                            "name": m.name,
+                            "file": jar_path.name,
+                            "source": m.source.value if m.source else "unknown",
+                        }
+                    )
                 except Exception:
                     missing.append(f"{m.name} ({m.file_name}) — read error")
             else:
-                missing.append(
-                    f"{m.name} ({m.file_name or 'no file'}) — file not found on disk"
-                )
+                missing.append(f"{m.name} ({m.file_name or 'no file'}) — file not found on disk")
 
         # ── Manifest files ──
         lines = [
@@ -284,7 +270,9 @@ async def trigger_manual_update(
     _admin: User = Depends(require_admin),
 ):
     """Trigger a manual update cycle (admin only)."""
-    asyncio.create_task(run_update_cycle())
+    task = asyncio.create_task(run_update_cycle())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "started", "message": "Update cycle queued"}
 
 
@@ -318,10 +306,5 @@ async def get_server_events(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    events = (
-        db.query(ServerEvent)
-        .order_by(ServerEvent.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    events = db.query(ServerEvent).order_by(ServerEvent.created_at.desc()).limit(limit).all()
     return events

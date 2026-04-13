@@ -2,17 +2,17 @@ import os
 import sys
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+from alembic import context
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.database import Base
-from core.config import get_settings
-
 # Import models so they register with Base.metadata
 import models  # noqa: F401
+from core.config import get_settings
+from core.database import Base
 
 config = context.config
 

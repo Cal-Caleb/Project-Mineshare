@@ -3,9 +3,8 @@ import hashlib
 import logging
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -25,6 +24,7 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+_background_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
 
 
 def _publish(channel: str, data: dict) -> None:
@@ -32,7 +32,9 @@ def _publish(channel: str, data: dict) -> None:
         bus = get_event_bus()
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(bus.publish(channel, data))
+            task = loop.create_task(bus.publish(channel, data))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
         except RuntimeError:
             asyncio.run(bus.publish(channel, data))
     except Exception:
@@ -63,9 +65,7 @@ class UploadManager:
         The uploader must be the original adder of that mod (or an admin).
         """
         if len(file_bytes) > self.max_size:
-            raise ValueError(
-                f"File too large ({len(file_bytes)} bytes, max {self.max_size})"
-            )
+            raise ValueError(f"File too large ({len(file_bytes)} bytes, max {self.max_size})")
 
         if not original_filename.lower().endswith(".jar"):
             raise ValueError("Only .jar files are accepted")
@@ -139,7 +139,7 @@ class UploadManager:
 
         upload.status = UploadStatus.APPROVED
         upload.approved_by_id = admin.id
-        upload.resolved_at = datetime.now(timezone.utc)
+        upload.resolved_at = datetime.now(UTC)
 
         # Create the mod record
         mod = Mod(
@@ -183,6 +183,7 @@ class UploadManager:
 
         # Create a community vote for the uploaded mod
         from core.vote_manager import VoteManager
+
         vote_mgr = VoteManager()
         vote_mgr.create_vote(db, mod, VoteType.ADD, admin)
 
@@ -226,7 +227,7 @@ class UploadManager:
 
         upload.status = UploadStatus.APPROVED
         upload.approved_by_id = admin.id
-        upload.resolved_at = datetime.now(timezone.utc)
+        upload.resolved_at = datetime.now(UTC)
 
         db.add(
             AuditLog(
@@ -255,15 +256,13 @@ class UploadManager:
         )
         return mod
 
-    def reject_upload(
-        self, db: Session, upload: ModUpload, admin: User, reason: str = ""
-    ) -> None:
+    def reject_upload(self, db: Session, upload: ModUpload, admin: User, reason: str = "") -> None:
         if admin.role != UserRole.ADMIN:
             raise PermissionError("Only admins can reject uploads")
 
         upload.status = UploadStatus.REJECTED
         upload.approved_by_id = admin.id
-        upload.resolved_at = datetime.now(timezone.utc)
+        upload.resolved_at = datetime.now(UTC)
         upload.scan_result = reason or upload.scan_result
 
         # Remove quarantined file

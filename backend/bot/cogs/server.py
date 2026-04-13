@@ -2,9 +2,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from core.database import SessionLocal
 from core.server_manager import ServerManager
 from models import User, UserRole
-from core.database import SessionLocal
 
 
 def _get_user(db, discord_id) -> User | None:
@@ -43,9 +43,7 @@ class ServerCog(commands.Cog):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
             await interaction.response.defer()

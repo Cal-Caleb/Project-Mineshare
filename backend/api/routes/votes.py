@@ -10,7 +10,7 @@ from api.deps import (
 from api.schemas import BallotOut, CastBallot, UserOut, VoteOut, VoteTally
 from core.database import get_db
 from core.vote_manager import VoteManager
-from models import EventSource, User, Vote, VoteStatus
+from models import User, Vote, VoteStatus
 
 router = APIRouter(prefix="/votes", tags=["votes"])
 
@@ -33,11 +33,7 @@ async def vote_history(
     vote_mgr: VoteManager = Depends(get_vote_manager),
 ):
     votes = (
-        db.query(Vote)
-        .filter(Vote.status != VoteStatus.PENDING)
-        .order_by(Vote.resolved_at.desc())
-        .limit(limit)
-        .all()
+        db.query(Vote).filter(Vote.status != VoteStatus.PENDING).order_by(Vote.resolved_at.desc()).limit(limit).all()
     )
     return [_vote_to_out(db, v, vote_mgr) for v in votes]
 
@@ -70,7 +66,7 @@ async def cast_ballot(
     try:
         vote_mgr.cast_vote(db, vote, user, body.in_favor)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     return _vote_to_out(db, vote, vote_mgr)
 
@@ -89,7 +85,7 @@ async def veto_vote(
     try:
         vote_mgr.veto(db, vote, admin)
     except (ValueError, PermissionError) as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     return _vote_to_out(db, vote, vote_mgr)
 
@@ -108,7 +104,7 @@ async def force_pass_vote(
     try:
         vote_mgr.force_pass(db, vote, admin)
     except (ValueError, PermissionError) as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     return _vote_to_out(db, vote, vote_mgr)
 
@@ -128,9 +124,7 @@ def _vote_to_out(db: Session, vote: Vote, vote_mgr: VoteManager) -> VoteOut:
         id=vote.id,
         mod=vote.mod,
         vote_type=vote.vote_type.value,
-        initiated_by=UserOut.model_validate(vote.initiated_by_user)
-        if vote.initiated_by_user
-        else None,
+        initiated_by=UserOut.model_validate(vote.initiated_by_user) if vote.initiated_by_user else None,
         status=vote.status.value,
         created_at=vote.created_at,
         expires_at=vote.expires_at,

@@ -20,12 +20,7 @@ async def get_audit_log(
     query = db.query(AuditLog)
     if action:
         query = query.filter(AuditLog.action == action)
-    logs = (
-        query.order_by(AuditLog.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    logs = query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit).all()
     return [
         AuditLogOut(
             id=log.id,

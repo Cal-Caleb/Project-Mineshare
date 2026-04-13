@@ -3,7 +3,6 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.deps import (
-    get_current_user,
     get_upload_manager,
     require_admin,
     require_mc_username,
@@ -30,7 +29,7 @@ async def upload_mod_jar(
     try:
         upload = await mgr.handle_upload(db, content, file.filename or "mod.jar", user)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     bus = get_event_bus()
     await bus.publish(
@@ -58,13 +57,11 @@ async def upload_mod_update(
     content = await file.read()
 
     try:
-        upload = await mgr.handle_upload(
-            db, content, file.filename or "mod.jar", user, mod_id=mod_id
-        )
+        upload = await mgr.handle_upload(db, content, file.filename or "mod.jar", user, mod_id=mod_id)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     except PermissionError as e:
-        raise HTTPException(403, str(e))
+        raise HTTPException(403, str(e)) from e
 
     bus = get_event_bus()
     await bus.publish(
@@ -113,7 +110,7 @@ async def approve_upload(
                 raise HTTPException(400, "mod_name is required for new mod uploads")
             mgr.approve_upload(db, upload, admin, body.mod_name)
     except (ValueError, PermissionError) as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     return _upload_to_out(upload)
 
@@ -133,7 +130,7 @@ async def reject_upload(
     try:
         mgr.reject_upload(db, upload, admin, body.reason)
     except PermissionError as e:
-        raise HTTPException(403, str(e))
+        raise HTTPException(403, str(e)) from e
 
     return _upload_to_out(upload)
 

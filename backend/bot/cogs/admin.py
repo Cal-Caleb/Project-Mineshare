@@ -19,38 +19,28 @@ class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(
-        name="forceupdate", description="(Admin) Trigger a manual update cycle"
-    )
+    @app_commands.command(name="forceupdate", description="(Admin) Trigger a manual update cycle")
     async def forceupdate(self, interaction: discord.Interaction):
         db = SessionLocal()
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
-            await interaction.response.send_message(
-                "Update cycle started. I'll report back when it's done."
-            )
+            await interaction.response.send_message("Update cycle started. I'll report back when it's done.")
             await run_update_cycle()
             await interaction.followup.send("Update cycle completed.")
         finally:
             db.close()
 
-    @app_commands.command(
-        name="restart", description="(Admin) Restart the Minecraft server"
-    )
+    @app_commands.command(name="restart", description="(Admin) Restart the Minecraft server")
     async def restart(self, interaction: discord.Interaction):
         db = SessionLocal()
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
             await interaction.response.defer()
@@ -75,9 +65,7 @@ class AdminCog(commands.Cog):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
             await interaction.response.defer()

@@ -23,9 +23,7 @@ class VotesCog(commands.Cog):
             votes = mgr.get_active_votes(db)
 
             if not votes:
-                await interaction.response.send_message(
-                    "No active votes right now.", ephemeral=True
-                )
+                await interaction.response.send_message("No active votes right now.", ephemeral=True)
                 return
 
             embed = discord.Embed(
@@ -38,8 +36,7 @@ class VotesCog(commands.Cog):
                 embed.add_field(
                     name=f"{vote.vote_type.value.upper()}: {vote.mod.name}",
                     value=(
-                        f"Yes: {tally['yes']} / No: {tally['no']}\n"
-                        f"Expires <t:{int(vote.expires_at.timestamp())}:R>"
+                        f"Yes: {tally['yes']} / No: {tally['no']}\nExpires <t:{int(vote.expires_at.timestamp())}:R>"
                     ),
                     inline=False,
                 )

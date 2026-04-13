@@ -3,9 +3,8 @@ import logging
 import re
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
@@ -90,14 +89,14 @@ class ModManager:
 
     # ── CurseForge API ───────────────────────────────────────────────
 
-    async def resolve_curseforge_url(self, url: str) -> Optional[CurseForgeModInfo]:
+    async def resolve_curseforge_url(self, url: str) -> CurseForgeModInfo | None:
         """Resolve a CurseForge URL to mod info, validated for NeoForge + our MC version."""
         slug = self._extract_slug(url)
         if not slug:
             return None
         return await self.search_by_slug(slug)
 
-    def _extract_slug(self, url: str) -> Optional[str]:
+    def _extract_slug(self, url: str) -> str | None:
         url = url.strip().rstrip("/")
         try:
             if "curseforge.com/minecraft" not in url:
@@ -110,7 +109,7 @@ class ModManager:
             pass
         return None
 
-    async def search_by_slug(self, slug: str) -> Optional[CurseForgeModInfo]:
+    async def search_by_slug(self, slug: str) -> CurseForgeModInfo | None:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self.base_url}/v1/mods/search",
@@ -164,7 +163,7 @@ class ModManager:
 
             return info
 
-    async def get_project(self, project_id: int) -> Optional[CurseForgeModInfo]:
+    async def get_project(self, project_id: int) -> CurseForgeModInfo | None:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self.base_url}/v1/mods/{project_id}",
@@ -181,7 +180,7 @@ class ModManager:
         self,
         client: httpx.AsyncClient,
         project_id: int,
-    ) -> Optional[CurseForgeFileInfo]:
+    ) -> CurseForgeFileInfo | None:
         """Find the newest compatible file for our MC version + NeoForge.
 
         CurseForge /files endpoint supports gameVersion + modLoaderType filters.
@@ -246,9 +245,7 @@ class ModManager:
         candidates.sort(key=lambda c: c.file_date or "", reverse=True)
         return candidates[0]
 
-    async def check_for_update(
-        self, project_id: int, current_file_id: int
-    ) -> Optional[CurseForgeModInfo]:
+    async def check_for_update(self, project_id: int, current_file_id: int) -> CurseForgeModInfo | None:
         """Check if a newer compatible file exists for this project.
 
         Only returns an update if the newer file supports our MC version + NeoForge.
@@ -285,13 +282,12 @@ class ModManager:
                 return None
             # Strip HTML tags for plain-text embed usage
             import re as _re
+
             text = _re.sub(r"<[^>]+>", "", html)
             text = _re.sub(r"\n{3,}", "\n\n", text).strip()
             return text[:2000] if text else None
 
-    async def download_mod_file(
-        self, project_id: int, file_id: int, dest_dir: Path
-    ) -> Optional[Path]:
+    async def download_mod_file(self, project_id: int, file_id: int, dest_dir: Path) -> Path | None:
         """Download a mod file from CurseForge."""
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.get(
@@ -362,19 +358,11 @@ class ModManager:
                 f"Check that the mod supports NeoForge on this version."
             )
 
-        existing = (
-            db.query(Mod)
-            .filter(Mod.curse_project_id == info.project_id)
-            .first()
-        )
+        existing = db.query(Mod).filter(Mod.curse_project_id == info.project_id).first()
         if existing and existing.status != ModStatus.REMOVED:
             raise ValueError(f"Mod '{info.name}' is already tracked")
 
-        status = (
-            ModStatus.ACTIVE
-            if (force and user.role == UserRole.ADMIN)
-            else ModStatus.PENDING_VOTE
-        )
+        status = ModStatus.ACTIVE if (force and user.role == UserRole.ADMIN) else ModStatus.PENDING_VOTE
 
         mod = Mod(
             name=info.name,
@@ -397,10 +385,7 @@ class ModManager:
             AuditLog(
                 user_id=user.id,
                 action="mod_added" if status == ModStatus.ACTIVE else "mod_proposed",
-                details=(
-                    f"{info.name} from CurseForge (NeoForge, MC {self.mc_version})"
-                    f" (force={force})"
-                ),
+                details=(f"{info.name} from CurseForge (NeoForge, MC {self.mc_version}) (force={force})"),
                 source=EventSource.WEB,
             )
         )
@@ -441,7 +426,7 @@ class ModManager:
 
     def remove_mod(self, db: Session, mod: Mod, user: User) -> None:
         mod.status = ModStatus.REMOVED
-        mod.updated_at = datetime.now(timezone.utc)
+        mod.updated_at = datetime.now(UTC)
         db.add(
             AuditLog(
                 user_id=user.id,
@@ -454,7 +439,7 @@ class ModManager:
 
     def activate_mod(self, db: Session, mod: Mod) -> None:
         mod.status = ModStatus.ACTIVE
-        mod.updated_at = datetime.now(timezone.utc)
+        mod.updated_at = datetime.now(UTC)
         db.commit()
 
     def get_active_mods(self, db: Session) -> list[Mod]:
@@ -489,9 +474,6 @@ class ModManager:
         try:
             with zipfile.ZipFile(path, "r") as zf:
                 names = zf.namelist()
-                return any(
-                    n.endswith(".class") or n == "META-INF/MANIFEST.MF"
-                    for n in names
-                )
+                return any(n.endswith(".class") or n == "META-INF/MANIFEST.MF" for n in names)
         except (zipfile.BadZipFile, Exception):
             return False

@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
@@ -29,9 +28,7 @@ class WhitelistManager:
         self.role2_id = settings.discord_role2_id
         self.bot_token = settings.discord_bot_token
 
-    def set_minecraft_username(
-        self, db: Session, user: User, mc_username: str
-    ) -> User:
+    def set_minecraft_username(self, db: Session, user: User, mc_username: str) -> User:
         """Set or update a user's Minecraft username and sync whitelist."""
         old_name = user.mc_username
 
@@ -51,8 +48,7 @@ class WhitelistManager:
             AuditLog(
                 user_id=user.id,
                 action="mc_username_set",
-                details=f"Set MC username to '{mc_username}'"
-                + (f" (was '{old_name}')" if old_name else ""),
+                details=f"Set MC username to '{mc_username}'" + (f" (was '{old_name}')" if old_name else ""),
                 source=EventSource.WEB,
             )
         )
@@ -101,8 +97,7 @@ class WhitelistManager:
             for user in users:
                 try:
                     resp = await client.get(
-                        f"https://discord.com/api/v10/guilds/{self.guild_id}"
-                        f"/members/{user.discord_id}",
+                        f"https://discord.com/api/v10/guilds/{self.guild_id}/members/{user.discord_id}",
                         headers={"Authorization": f"Bot {self.bot_token}"},
                     )
                     if resp.status_code == 404:
@@ -146,9 +141,7 @@ class WhitelistManager:
                         changed += 1
 
                 except Exception:
-                    logger.exception(
-                        "Failed to sync roles for user %s", user.discord_id
-                    )
+                    logger.exception("Failed to sync roles for user %s", user.discord_id)
 
         if changed:
             db.commit()

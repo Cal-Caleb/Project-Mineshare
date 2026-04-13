@@ -55,14 +55,10 @@ class ModsCog(commands.Cog):
                 return
 
             if mod.status == ModStatus.ACTIVE:
-                await interaction.followup.send(
-                    f"✅ **{mod.name}** added directly (admin force)."
-                )
+                await interaction.followup.send(f"✅ **{mod.name}** added directly (admin force).")
             else:
                 vote_mgr = VoteManager()
-                vote_mgr.create_vote(
-                    db, mod, VoteType.ADD, user, source=EventSource.DISCORD
-                )
+                vote_mgr.create_vote(db, mod, VoteType.ADD, user, source=EventSource.DISCORD)
                 await interaction.followup.send(
                     f"🗳️ Vote started for **{mod.name}** — check the votes channel.",
                     ephemeral=True,
@@ -114,9 +110,7 @@ class ModsCog(commands.Cog):
 
             vote_mgr = VoteManager()
             try:
-                vote_mgr.create_vote(
-                    db, mod, VoteType.REMOVE, user, source=EventSource.DISCORD
-                )
+                vote_mgr.create_vote(db, mod, VoteType.REMOVE, user, source=EventSource.DISCORD)
             except ValueError as e:
                 await interaction.followup.send(str(e), ephemeral=True)
                 return
@@ -154,20 +148,17 @@ class ModsCog(commands.Cog):
         try:
             user = _get_user(db, interaction.user.id)
             if not user:
-                await interaction.response.send_message(
-                    "Register on the web app first.", ephemeral=True
-                )
+                await interaction.response.send_message("Register on the web app first.", ephemeral=True)
                 return
 
             from core.server_manager import ServerManager
             from core.whitelist_manager import WhitelistManager
+
             wl = WhitelistManager(ServerManager())
 
             existing = db.query(User).filter(User.mc_username == username, User.id != user.id).first()
             if existing:
-                await interaction.response.send_message(
-                    "That username is already claimed.", ephemeral=True
-                )
+                await interaction.response.send_message("That username is already claimed.", ephemeral=True)
                 return
 
             wl.set_minecraft_username(db, user, username)

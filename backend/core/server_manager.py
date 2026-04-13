@@ -1,14 +1,12 @@
+import contextlib
 import logging
-import os
 import shutil
 import socket
 import struct
-import subprocess
 import tarfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -86,7 +84,7 @@ class ServerManager:
             return body.strip()
 
     def announce(self, message: str) -> None:
-        self.rcon_command(f'say [MineShare] {message}')
+        self.rcon_command(f"say [MineShare] {message}")
 
     def get_online_players(self) -> list[str]:
         """Get list of online player names."""
@@ -124,9 +122,7 @@ class ServerManager:
 
     # ── Backup ───────────────────────────────────────────────────────
 
-    def backup_world(
-        self, db: Session | None = None, triggered_by_id: int | None = None
-    ) -> Optional[str]:
+    def backup_world(self, db: Session | None = None, triggered_by_id: int | None = None) -> str | None:
         event = None
         if db:
             event = ServerEvent(
@@ -143,11 +139,11 @@ class ServerManager:
             if event and db:
                 event.status = ServerEventStatus.FAILED
                 event.details = "World directory not found"
-                event.completed_at = datetime.now(timezone.utc)
+                event.completed_at = datetime.now(UTC)
                 db.commit()
             return None
 
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         backup_name = f"backup_{stamp}"
         tar_path = self.backup_path / f"{backup_name}.tar.gz"
 
@@ -160,7 +156,7 @@ class ServerManager:
             if event and db:
                 event.status = ServerEventStatus.SUCCESS
                 event.backup_path = str(tar_path)
-                event.completed_at = datetime.now(timezone.utc)
+                event.completed_at = datetime.now(UTC)
                 db.commit()
 
             self._cleanup_old_backups(keep=10)
@@ -171,7 +167,7 @@ class ServerManager:
             if event and db:
                 event.status = ServerEventStatus.FAILED
                 event.details = "Backup process failed"
-                event.completed_at = datetime.now(timezone.utc)
+                event.completed_at = datetime.now(UTC)
                 db.commit()
             return None
 
@@ -194,12 +190,8 @@ class ServerManager:
         try:
             mods_path.mkdir(parents=True, exist_ok=True)
 
-            desired = {
-                f.name: f for f in staging_dir.iterdir() if f.is_file()
-            }
-            current = {
-                f.name: f for f in mods_path.iterdir() if f.is_file()
-            }
+            desired = {f.name: f for f in staging_dir.iterdir() if f.is_file()}
+            current = {f.name: f for f in mods_path.iterdir() if f.is_file()}
 
             removed = 0
             for name, path in current.items():
@@ -267,14 +259,14 @@ class ServerManager:
                 raise RuntimeError("Server did not come back after restart")
             if event and db:
                 event.status = ServerEventStatus.SUCCESS
-                event.completed_at = datetime.now(timezone.utc)
+                event.completed_at = datetime.now(UTC)
                 db.commit()
             return True
         except Exception:
             logger.exception("Failed to restart server")
             if event and db:
                 event.status = ServerEventStatus.FAILED
-                event.completed_at = datetime.now(timezone.utc)
+                event.completed_at = datetime.now(UTC)
                 db.commit()
             return False
 
@@ -284,9 +276,7 @@ class ServerManager:
         logger.info("Waiting for server to stop (timeout=%ds)...", timeout)
         while time.time() - start < timeout:
             try:
-                with socket.create_connection(
-                    (self.rcon_host, self.rcon_port), timeout=2
-                ):
+                with socket.create_connection((self.rcon_host, self.rcon_port), timeout=2):
                     pass
                 # RCON port still open — still running
             except (ConnectionRefusedError, OSError):
@@ -376,9 +366,7 @@ class ServerManager:
                 # 1. Announce
                 players = self.get_online_players()
                 warning_time = self.restart_warning_seconds if players else 5
-                self.announce(
-                    f"Server restarting in {warning_time}s for mod updates!"
-                )
+                self.announce(f"Server restarting in {warning_time}s for mod updates!")
                 time.sleep(warning_time)
 
                 # 2. Save
@@ -413,12 +401,12 @@ class ServerManager:
                 logger.error("Health check failed, consider rollback")
                 event.status = ServerEventStatus.FAILED
                 event.details = "Health check failed after restart"
-                event.completed_at = datetime.now(timezone.utc)
+                event.completed_at = datetime.now(UTC)
                 db.commit()
                 return False
 
             event.status = ServerEventStatus.SUCCESS
-            event.completed_at = datetime.now(timezone.utc)
+            event.completed_at = datetime.now(UTC)
             db.add(
                 AuditLog(
                     user_id=triggered_by_id,
@@ -435,12 +423,10 @@ class ServerManager:
             logger.exception("Update loop failed")
             event.status = ServerEventStatus.FAILED
             event.details = str(exc)
-            event.completed_at = datetime.now(timezone.utc)
+            event.completed_at = datetime.now(UTC)
             db.commit()
             return False
         finally:
             # Always clear the pause flag so the server can relaunch
-            try:
+            with contextlib.suppress(Exception):
                 self.pause_flag.unlink(missing_ok=True)
-            except Exception:
-                pass

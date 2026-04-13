@@ -4,7 +4,7 @@ Mirrors the frontend's gold-on-space palette so Discord embeds feel like
 a natural extension of the web app.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 
@@ -21,9 +21,7 @@ ACCENT_AMBER = discord.Color.from_str("#f59e0b")
 ACCENT_BLUE = discord.Color.from_str("#3b82f6")
 
 BRAND = "MineShare"
-BRAND_ICON = (
-    "https://cdn.discordapp.com/emojis/1019234567890123456.png"  # placeholder
-)
+BRAND_ICON = "https://cdn.discordapp.com/emojis/1019234567890123456.png"  # placeholder
 
 
 def base_embed(
@@ -37,13 +35,14 @@ def base_embed(
         title=title,
         description=description or None,
         color=color,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
     )
     embed.set_footer(text=f"⛏  {BRAND}")
     return embed
 
 
 # ── Tally bar ──────────────────────────────────────────────────────────
+
 
 def tally_bar(yes: int, no: int, length: int = 14) -> str:
     total = yes + no
@@ -93,19 +92,18 @@ def vote_embed(
 
     if mod_source:
         embed.add_field(name="Source", value=mod_source.title(), inline=True)
-    embed.add_field(
-        name="Proposed by", value=initiated_by or "Unknown", inline=True
-    )
+    embed.add_field(name="Proposed by", value=initiated_by or "Unknown", inline=True)
     if expires_at:
         ts = int(expires_at.timestamp())
         embed.add_field(name="Closes", value=f"<t:{ts}:R>", inline=True)
 
     embed.set_footer(text=f"⛏  {BRAND}")
-    embed.timestamp = datetime.now(timezone.utc)
+    embed.timestamp = datetime.now(UTC)
     return embed
 
 
 # ── Upload embed ───────────────────────────────────────────────────────
+
 
 def upload_embed(
     *,
@@ -128,12 +126,10 @@ def upload_embed(
     if is_update and mod_name:
         embed.add_field(name="Updates", value=mod_name, inline=True)
     elif not is_update:
-        embed.add_field(
-            name="Type", value="New mod (will start a vote)", inline=True
-        )
+        embed.add_field(name="Type", value="New mod (will start a vote)", inline=True)
 
     embed.set_footer(text=f"⛏  {BRAND}  ·  Admins: approve or reject below")
-    embed.timestamp = datetime.now(timezone.utc)
+    embed.timestamp = datetime.now(UTC)
     return embed
 
 
@@ -146,6 +142,7 @@ def _fmt_size(n: int) -> str:
 
 
 # ── Server status embed ────────────────────────────────────────────────
+
 
 def server_status_embed(
     *,
@@ -197,6 +194,7 @@ def server_status_embed(
 
 # ── Mod update embed ─────────────────────────────────────────────────
 
+
 def mod_update_embed(
     *,
     mod_name: str,
@@ -232,11 +230,12 @@ def mod_update_embed(
         embed.add_field(name="Changelog", value=cl, inline=False)
 
     embed.set_footer(text=f"⛏  {BRAND}")
-    embed.timestamp = datetime.now(timezone.utc)
+    embed.timestamp = datetime.now(UTC)
     return embed
 
 
 # ── Mod catalogue card embed ──────────────────────────────────────────
+
 
 def mod_card_embed(
     *,
@@ -247,11 +246,7 @@ def mod_card_embed(
     added_by: str | None,
     image_filename: str | None = None,
 ) -> discord.Embed:
-    desc = (
-        (description[:200] + "…")
-        if (description and len(description) > 200)
-        else (description or "")
-    )
+    desc = (description[:200] + "…") if (description and len(description) > 200) else (description or "")
     embed = discord.Embed(description=desc, color=GOLD)
     if image_filename:
         embed.set_image(url=f"attachment://{image_filename}")
@@ -265,5 +260,5 @@ def mod_card_embed(
             inline=True,
         )
     embed.set_footer(text=f"⛏  {BRAND}")
-    embed.timestamp = datetime.now(timezone.utc)
+    embed.timestamp = datetime.now(UTC)
     return embed

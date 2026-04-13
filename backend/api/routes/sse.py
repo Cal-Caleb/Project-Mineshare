@@ -2,10 +2,9 @@
 
 import json
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
-from api.deps import get_current_user
 from core.events import (
     CHANNEL_MOD_ADDED,
     CHANNEL_MOD_REMOVED,
@@ -19,7 +18,6 @@ from core.events import (
     CHANNEL_VOTE_RESOLVED,
     get_event_bus,
 )
-from models import User
 
 router = APIRouter(tags=["sse"])
 

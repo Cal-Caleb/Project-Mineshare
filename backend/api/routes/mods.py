@@ -5,21 +5,18 @@ from api.deps import (
     get_current_user,
     get_mod_manager,
     get_vote_manager,
-    require_admin,
     require_mc_username,
 )
 from api.schemas import (
     AddCurseForgeMod,
-    CreateVote,
     CurseForgePreview,
     ModOut,
-    VoteOut,
 )
 from core.database import get_db
 from core.events import CHANNEL_MOD_ADDED, CHANNEL_MOD_REMOVED, get_event_bus
 from core.mod_manager import ModManager
 from core.vote_manager import VoteManager
-from models import EventSource, Mod, ModStatus, User, UserRole, VoteType
+from models import Mod, ModStatus, User, UserRole, VoteType
 
 router = APIRouter(prefix="/mods", tags=["mods"])
 
@@ -91,11 +88,9 @@ async def add_curseforge_mod(
         raise HTTPException(400, "Could not resolve that CurseForge URL")
 
     try:
-        mod = mgr.add_mod_from_curseforge(
-            db, info, user, body.url, force=body.force
-        )
+        mod = mgr.add_mod_from_curseforge(db, info, user, body.url, force=body.force)
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
 
     # If not force-added, create a vote
     if mod.status == ModStatus.PENDING_VOTE:
@@ -140,7 +135,7 @@ async def remove_mod(
         try:
             vote_mgr.create_vote(db, mod, VoteType.REMOVE, user)
         except ValueError as e:
-            raise HTTPException(409, str(e))
+            raise HTTPException(409, str(e)) from e
 
     bus = get_event_bus()
     await bus.publish(

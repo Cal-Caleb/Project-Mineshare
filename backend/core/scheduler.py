@@ -7,7 +7,7 @@ Responsibilities:
 - Stage changed mods and trigger the server update sequence
 """
 
-import asyncio
+import contextlib
 import logging
 import shutil
 import tempfile
@@ -49,10 +49,8 @@ def _acquire_lock() -> bool:
 
 
 def _release_lock() -> None:
-    try:
+    with contextlib.suppress(Exception):
         _LOCK_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
 
 
 async def run_update_cycle() -> None:
@@ -95,9 +93,7 @@ async def run_update_cycle() -> None:
             if not mod.curse_project_id or not mod.curse_file_id:
                 continue
             try:
-                updated_info = await mod_mgr.check_for_update(
-                    mod.curse_project_id, mod.curse_file_id
-                )
+                updated_info = await mod_mgr.check_for_update(mod.curse_project_id, mod.curse_file_id)
                 if updated_info:
                     updates_found.append((mod, updated_info))
                     logger.info(
@@ -118,9 +114,7 @@ async def run_update_cycle() -> None:
         # Apply CurseForge updates to DB and fetch new files into cache
         for mod, info in updates_found:
             try:
-                new_file = await mod_mgr.download_mod_file(
-                    info.project_id, info.latest_file_id, cache_dir
-                )
+                new_file = await mod_mgr.download_mod_file(info.project_id, info.latest_file_id, cache_dir)
                 if new_file:
                     old_file_name = mod.file_name
                     old_file_id = mod.curse_file_id
@@ -128,9 +122,7 @@ async def run_update_cycle() -> None:
                     # Fetch changelog from CurseForge
                     changelog = None
                     try:
-                        changelog = await mod_mgr.get_file_changelog(
-                            info.project_id, info.latest_file_id
-                        )
+                        changelog = await mod_mgr.get_file_changelog(info.project_id, info.latest_file_id)
                     except Exception:
                         logger.warning("Could not fetch changelog for %s", mod.name)
 
@@ -140,14 +132,16 @@ async def run_update_cycle() -> None:
                     mod.file_hash = ModManager.calculate_file_hash(new_file)
 
                     # Record update log with changelog
-                    db.add(ModUpdateLog(
-                        mod_id=mod.id,
-                        old_version=old_file_name,
-                        new_version=info.latest_file_name,
-                        old_file_id=old_file_id,
-                        new_file_id=info.latest_file_id,
-                        changelog=changelog,
-                    ))
+                    db.add(
+                        ModUpdateLog(
+                            mod_id=mod.id,
+                            old_version=old_file_name,
+                            new_version=info.latest_file_name,
+                            old_file_id=old_file_id,
+                            new_file_id=info.latest_file_id,
+                            changelog=changelog,
+                        )
+                    )
                     db.commit()
 
                     await bus.publish(
@@ -179,9 +173,7 @@ async def run_update_cycle() -> None:
                     shutil.copy2(src, dest)
                     logger.debug("Staged uploaded mod: %s", mod.file_name)
                 else:
-                    logger.warning(
-                        "Upload file missing for %s: %s", mod.name, mod.file_path
-                    )
+                    logger.warning("Upload file missing for %s: %s", mod.name, mod.file_path)
 
             elif mod.source == ModSource.CURSEFORGE:
                 # Try cache → server mods folder → fresh download
@@ -194,30 +186,18 @@ async def run_update_cycle() -> None:
                     shutil.copy2(on_server, cached)
                 elif mod.curse_project_id and mod.curse_file_id:
                     try:
-                        downloaded = await mod_mgr.download_mod_file(
-                            mod.curse_project_id, mod.curse_file_id, cache_dir
-                        )
+                        downloaded = await mod_mgr.download_mod_file(mod.curse_project_id, mod.curse_file_id, cache_dir)
                         if downloaded and downloaded.exists():
                             shutil.copy2(downloaded, dest)
                         else:
-                            logger.warning(
-                                "Could not fetch CF mod %s", mod.name
-                            )
+                            logger.warning("Could not fetch CF mod %s", mod.name)
                     except Exception:
                         logger.exception("Failed to fetch CF mod %s", mod.name)
 
         # 5. Diff desired staging vs current server mods dir
-        desired_files = {
-            f.name: f.stat().st_size
-            for f in staging_dir.iterdir()
-            if f.is_file()
-        }
+        desired_files = {f.name: f.stat().st_size for f in staging_dir.iterdir() if f.is_file()}
         current_files = (
-            {
-                f.name: f.stat().st_size
-                for f in server_mods_dir.iterdir()
-                if f.is_file()
-            }
+            {f.name: f.stat().st_size for f in server_mods_dir.iterdir() if f.is_file()}
             if server_mods_dir.exists()
             else {}
         )
@@ -279,9 +259,7 @@ def start_scheduler() -> None:
         max_instances=1,
     )
     scheduler.start()
-    logger.info(
-        "Scheduler started (interval=%dm)", settings.update_interval_minutes
-    )
+    logger.info("Scheduler started (interval=%dm)", settings.update_interval_minutes)
 
 
 def stop_scheduler() -> None:

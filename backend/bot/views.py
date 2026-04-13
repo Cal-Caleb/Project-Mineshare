@@ -8,8 +8,8 @@ to the correct handler even after a bot restart.
 import discord
 
 from core.database import SessionLocal
-from core.vote_manager import VoteManager
 from core.upload_manager import UploadManager
+from core.vote_manager import VoteManager
 from models import (
     EventSource,
     ModUpload,
@@ -90,21 +90,15 @@ class VoteView(discord.ui.View):
         try:
             user = _get_user(db, interaction.user.id)
             if not user:
-                await interaction.response.send_message(
-                    "You need to register on the web app first.", ephemeral=True
-                )
+                await interaction.response.send_message("You need to register on the web app first.", ephemeral=True)
                 return
             if not user.mc_username:
-                await interaction.response.send_message(
-                    "Set your Minecraft username first.", ephemeral=True
-                )
+                await interaction.response.send_message("Set your Minecraft username first.", ephemeral=True)
                 return
 
             vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
             if not vote:
-                await interaction.response.send_message(
-                    "Vote not found.", ephemeral=True
-                )
+                await interaction.response.send_message("Vote not found.", ephemeral=True)
                 return
 
             mgr = VoteManager()
@@ -117,8 +111,7 @@ class VoteView(discord.ui.View):
             tally = mgr.get_tally(db, vote)
             label = "Yes" if in_favor else "No"
             await interaction.response.send_message(
-                f"**{interaction.user.display_name}** voted **{label}**! "
-                f"(Yes: {tally['yes']} / No: {tally['no']})",
+                f"**{interaction.user.display_name}** voted **{label}**! (Yes: {tally['yes']} / No: {tally['no']})",
                 ephemeral=True,
             )
         finally:
@@ -129,9 +122,7 @@ class VoteView(discord.ui.View):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin only.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin only.", ephemeral=True)
                 return
             vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
             if not vote:
@@ -142,9 +133,7 @@ class VoteView(discord.ui.View):
             except (ValueError, PermissionError) as e:
                 await interaction.response.send_message(str(e), ephemeral=True)
                 return
-            await interaction.response.send_message(
-                f"\U0001f6ab Vote on **{vote.mod.name}** vetoed.", ephemeral=True
-            )
+            await interaction.response.send_message(f"\U0001f6ab Vote on **{vote.mod.name}** vetoed.", ephemeral=True)
         finally:
             db.close()
 
@@ -153,9 +142,7 @@ class VoteView(discord.ui.View):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin only.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin only.", ephemeral=True)
                 return
             vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
             if not vote:
@@ -166,9 +153,7 @@ class VoteView(discord.ui.View):
             except (ValueError, PermissionError) as e:
                 await interaction.response.send_message(str(e), ephemeral=True)
                 return
-            await interaction.response.send_message(
-                f"\u26a1 Vote on **{vote.mod.name}** force-passed.", ephemeral=True
-            )
+            await interaction.response.send_message(f"\u26a1 Vote on **{vote.mod.name}** force-passed.", ephemeral=True)
         finally:
             db.close()
 
@@ -199,9 +184,7 @@ class RemoveModView(discord.ui.View):
         try:
             user = _get_user(db, interaction.user.id)
             if not user:
-                await interaction.response.send_message(
-                    "Register on the web app first.", ephemeral=True
-                )
+                await interaction.response.send_message("Register on the web app first.", ephemeral=True)
                 return
             if not user.mc_username:
                 await interaction.response.send_message(
@@ -212,9 +195,7 @@ class RemoveModView(discord.ui.View):
 
             mod = db.query(Mod).filter(Mod.id == self.mod_id).first()
             if not mod or mod.status != ModStatus.ACTIVE:
-                await interaction.response.send_message(
-                    "Mod not found or already removed.", ephemeral=True
-                )
+                await interaction.response.send_message("Mod not found or already removed.", ephemeral=True)
                 return
 
             mgr = VoteManager()
@@ -269,16 +250,12 @@ class UploadApprovalView(discord.ui.View):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
             upload = db.query(ModUpload).filter(ModUpload.id == self.upload_id).first()
             if not upload:
-                await interaction.response.send_message(
-                    "Upload not found.", ephemeral=True
-                )
+                await interaction.response.send_message("Upload not found.", ephemeral=True)
                 return
 
             # Updates skip the name prompt and the vote.
@@ -289,14 +266,10 @@ class UploadApprovalView(discord.ui.View):
                 except (ValueError, PermissionError) as e:
                     await interaction.response.send_message(str(e), ephemeral=True)
                     return
-                await interaction.response.send_message(
-                    f"\u2705 Update **{upload.original_filename}** approved."
-                )
+                await interaction.response.send_message(f"\u2705 Update **{upload.original_filename}** approved.")
             else:
                 # New mods still need an admin-chosen display name
-                await interaction.response.send_modal(
-                    UploadApproveModal(self.upload_id)
-                )
+                await interaction.response.send_modal(UploadApproveModal(self.upload_id))
         finally:
             db.close()
 
@@ -305,9 +278,7 @@ class UploadApprovalView(discord.ui.View):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
             upload = db.query(ModUpload).filter(ModUpload.id == self.upload_id).first()
@@ -317,9 +288,7 @@ class UploadApprovalView(discord.ui.View):
 
             mgr = UploadManager()
             mgr.reject_upload(db, upload, user, reason="Rejected via Discord")
-            await interaction.response.send_message(
-                f"\u274c Upload **{upload.original_filename}** rejected."
-            )
+            await interaction.response.send_message(f"\u274c Upload **{upload.original_filename}** rejected.")
         finally:
             db.close()
 
@@ -341,9 +310,7 @@ class UploadApproveModal(discord.ui.Modal, title="Approve Upload"):
         try:
             user = _get_user(db, interaction.user.id)
             if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
+                await interaction.response.send_message("Admin access required.", ephemeral=True)
                 return
 
             upload = db.query(ModUpload).filter(ModUpload.id == self.upload_id).first()

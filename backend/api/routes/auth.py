@@ -1,11 +1,10 @@
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from api.schemas import TokenResponse, UserOut
 from core.config import Settings, get_settings
 from core.database import get_db
 from core.security import create_access_token
