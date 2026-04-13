@@ -43,8 +43,7 @@ class Settings(BaseSettings):
     max_upload_size: int = 52428800  # 50MB
 
     # Voting
-    vote_duration_hours: int = 24
-    vote_quorum: int = 3
+    vote_duration_hours: int = 12
 
     # Update loop
     update_interval_minutes: int = 30
