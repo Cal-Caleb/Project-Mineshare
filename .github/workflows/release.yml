@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current version
+        id: version
+        run: |
+          # Auto-increment: find latest tag, bump patch
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            NEW_VERSION="v1.0.0"
+          else
+            # Parse semver
+            VERSION=${LATEST_TAG#v}
+            MAJOR=$(echo $VERSION | cut -d. -f1)
+            MINOR=$(echo $VERSION | cut -d. -f2)
+            PATCH=$(echo $VERSION | cut -d. -f3)
+
+            # Check commit messages for version bump hints
+            COMMITS=$(git log "$LATEST_TAG"..HEAD --oneline --no-merges)
+
+            if echo "$COMMITS" | grep -qi "breaking\|BREAKING"; then
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+            elif echo "$COMMITS" | grep -qi "feat\|feature\|add"; then
+              MINOR=$((MINOR + 1))
+              PATCH=0
+            else
+              PATCH=$((PATCH + 1))
+            fi
+
+            NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          fi
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          RANGE="${LATEST_TAG:+$LATEST_TAG..}HEAD"
+
+          {
+            echo "changelog<<CHANGELOG_EOF"
+
+            # Group commits by type
+            FEATURES=$(git log $RANGE --oneline --no-merges --grep="feat\|add\|Add\|new\|New" 2>/dev/null || true)
+            FIXES=$(git log $RANGE --oneline --no-merges --grep="fix\|Fix\|bug\|Bug" 2>/dev/null || true)
+            OTHER=$(git log $RANGE --oneline --no-merges 2>/dev/null || true)
+
+            if [ -n "$FEATURES" ]; then
+              echo "### New Features"
+              echo "$FEATURES" | while read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo "$FIXES" | while read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            if [ -n "$OTHER" ]; then
+              echo "### All Changes"
+              echo "$OTHER" | while read -r line; do echo "- $line"; done
+            fi
+
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: tag_check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" \
+            --title "MineShare ${{ steps.version.outputs.version }}" \
+            --notes "$(cat <<'EOF'
+          ## MineShare ${{ steps.version.outputs.version }}
+
+          ${{ steps.changelog.outputs.changelog }}
+
+          ---
+
+          ### Deployment
+
+          ```bash
+          git pull origin main
+          docker compose build --no-cache
+          docker compose up -d
+          ```
+
+          *Full documentation: [README](https://github.com/${{ github.repository }}#readme)*
+          EOF
+          )" \
+            --latest

@@ -1,0 +1,88 @@
+name: Docker Build
+
+on:
+  pull_request:
+    branches: [testing, main]
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-compose-build:
+    name: Docker Compose Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create dummy .env for build
+        run: |
+          cat > backend/.env << 'ENVEOF'
+          DATABASE_URL=postgresql://user:password@db:5432/modserver
+          DISCORD_BOT_TOKEN=dummy
+          DISCORD_CLIENT_ID=dummy
+          DISCORD_CLIENT_SECRET=dummy
+          DISCORD_GUILD_ID=000000000000000000
+          JWT_SECRET=ci-test-secret
+          REDIS_URL=redis://redis:6379/0
+          RCON_HOST=localhost
+          RCON_PORT=25575
+          RCON_PASSWORD=dummy
+          ENVEOF
+
+      - name: Create required directories
+        run: |
+          mkdir -p backend/opt/minecraft/{server,backups,uploads,quarantine,mod_cache}
+
+      - name: Build all services
+        run: docker compose build --parallel
+
+      - name: Verify images created
+        run: |
+          echo "Built images:"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -i mineshare || \
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | head -10
+
+      - name: Start services (smoke test)
+        run: |
+          docker compose up -d db redis
+          sleep 5
+          docker compose up -d backend bot frontend
+          sleep 10
+
+      - name: Check service health
+        run: |
+          echo "=== Service Status ==="
+          docker compose ps
+
+          echo ""
+          echo "=== Backend Logs ==="
+          docker compose logs backend --tail=20
+
+          echo ""
+          echo "=== Bot Logs ==="
+          docker compose logs bot --tail=20
+
+          echo ""
+          echo "=== Frontend Logs ==="
+          docker compose logs frontend --tail=10
+
+      - name: Backend health check
+        run: |
+          # Wait for backend to be ready
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:8000/api/health > /dev/null 2>&1; then
+              echo "Backend is healthy"
+              exit 0
+            fi
+            echo "Waiting for backend... ($i/15)"
+            sleep 2
+          done
+          echo "::error::Backend failed health check"
+          docker compose logs backend --tail=50
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans

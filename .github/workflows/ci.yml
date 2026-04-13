@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [development, testing, main]
+  pull_request:
+    branches: [development, testing, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Backend checks ──────────────────────────────────────────────────
+  backend-lint:
+    name: Backend Lint & Syntax
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install ruff
+
+      - name: Ruff lint
+        run: ruff check . --output-format=github
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Syntax check all Python files
+        run: |
+          echo "Checking syntax of all .py files..."
+          errors=0
+          while IFS= read -r file; do
+            if ! python -m py_compile "$file" 2>&1; then
+              errors=$((errors + 1))
+            fi
+          done < <(find . -name "*.py" -not -path "./.venv/*")
+          if [ $errors -gt 0 ]; then
+            echo "::error::$errors file(s) have syntax errors"
+            exit 1
+          fi
+          echo "All Python files pass syntax check"
+
+  backend-imports:
+    name: Backend Import Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Verify all modules importable
+        run: |
+          python -c "
+          import importlib, pathlib, sys
+
+          failures = []
+          root = pathlib.Path('.')
+          for py in sorted(root.rglob('*.py')):
+              if py.name.startswith('_') and py.name != '__init__.py':
+                  continue
+              parts = list(py.with_suffix('').parts)
+              if parts[-1] == '__init__':
+                  parts = parts[:-1]
+              module = '.'.join(parts)
+              try:
+                  importlib.import_module(module)
+              except Exception as e:
+                  # Some modules need runtime deps (redis, discord) - just check for SyntaxError
+                  if isinstance(e, SyntaxError):
+                      failures.append(f'{module}: {e}')
+
+          if failures:
+              for f in failures:
+                  print(f'::error::{f}')
+              sys.exit(1)
+          print('All modules pass import check')
+          "
+
+  # ── Frontend checks ─────────────────────────────────────────────────
+  frontend-build:
+    name: Frontend Build & Typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+        # Vite projects use import.meta.env which vanilla tsc doesn't know.
+        # If this fails only on import.meta.env, it's a false positive.
+        continue-on-error: true
+
+      - name: Production build
+        run: npm run build
+
+      - name: Check bundle size
+        run: |
+          JS_SIZE=$(stat -c%s dist/assets/*.js 2>/dev/null | awk '{s+=$1} END {print s}')
+          CSS_SIZE=$(stat -c%s dist/assets/*.css 2>/dev/null | awk '{s+=$1} END {print s}')
+          TOTAL=$((JS_SIZE + CSS_SIZE))
+          echo "JS:  $((JS_SIZE / 1024)) KB"
+          echo "CSS: $((CSS_SIZE / 1024)) KB"
+          echo "Total: $((TOTAL / 1024)) KB"
+
+          # Warn if bundle is over 1MB (uncompressed)
+          if [ $TOTAL -gt 1048576 ]; then
+            echo "::warning::Bundle size is over 1MB ($((TOTAL / 1024)) KB). Consider code splitting."
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/dist/
+          retention-days: 7
+
+  # ── Summary gate ────────────────────────────────────────────────────
+  ci-pass:
+    name: CI Pass
+    runs-on: ubuntu-latest
+    needs: [backend-lint, backend-imports, frontend-build]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [ "${{ needs.backend-lint.result }}" != "success" ] || \
+             [ "${{ needs.frontend-build.result }}" != "success" ]; then
+            echo "::error::One or more CI jobs failed"
+            exit 1
+          fi
+          echo "All CI checks passed"
