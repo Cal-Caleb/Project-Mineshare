@@ -1,4 +1,9 @@
-"""Persistent Discord UI views for voting and approvals."""
+"""Persistent Discord UI views for voting and approvals.
+
+Every view uses dynamic custom_ids that include the entity ID
+(e.g. "vote_yes:42") so that discord.py can route button presses
+to the correct handler even after a bot restart.
+"""
 
 import discord
 
@@ -18,29 +23,66 @@ def _get_user(db, discord_id: str) -> User | None:
     return db.query(User).filter(User.discord_id == str(discord_id)).first()
 
 
+# ── Vote View ────────────────────────────────────────────────────────
+
+
 class VoteView(discord.ui.View):
-    """Persistent vote buttons attached to a vote embed."""
+    """Persistent vote buttons attached to a vote embed.
+
+    Each button's custom_id includes the vote ID so multiple VoteViews
+    can coexist and survive bot restarts.
+    """
 
     def __init__(self, vote_id: int):
         super().__init__(timeout=None)
         self.vote_id = vote_id
 
-    @discord.ui.button(
-        label="Vote Yes",
-        style=discord.ButtonStyle.success,
-        custom_id="vote_yes",
-        emoji="\u2705",
-    )
-    async def vote_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Row 0 — member buttons
+        yes_btn = discord.ui.Button(
+            label="Vote Yes",
+            style=discord.ButtonStyle.success,
+            custom_id=f"vote_yes:{vote_id}",
+            emoji="\u2705",
+            row=0,
+        )
+        yes_btn.callback = self._vote_yes
+        self.add_item(yes_btn)
+
+        no_btn = discord.ui.Button(
+            label="Vote No",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"vote_no:{vote_id}",
+            emoji="\u274c",
+            row=0,
+        )
+        no_btn.callback = self._vote_no
+        self.add_item(no_btn)
+
+        # Row 1 — admin buttons
+        veto_btn = discord.ui.Button(
+            label="Veto",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"vote_veto:{vote_id}",
+            emoji="\U0001f6ab",
+            row=1,
+        )
+        veto_btn.callback = self._admin_veto
+        self.add_item(veto_btn)
+
+        force_btn = discord.ui.Button(
+            label="Force Pass",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"vote_force:{vote_id}",
+            emoji="\u26a1",
+            row=1,
+        )
+        force_btn.callback = self._admin_force_pass
+        self.add_item(force_btn)
+
+    async def _vote_yes(self, interaction: discord.Interaction):
         await self._handle_vote(interaction, in_favor=True)
 
-    @discord.ui.button(
-        label="Vote No",
-        style=discord.ButtonStyle.danger,
-        custom_id="vote_no",
-        emoji="\u274c",
-    )
-    async def vote_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _vote_no(self, interaction: discord.Interaction):
         await self._handle_vote(interaction, in_favor=False)
 
     async def _handle_vote(self, interaction: discord.Interaction, in_favor: bool):
@@ -54,7 +96,7 @@ class VoteView(discord.ui.View):
                 return
             if not user.mc_username:
                 await interaction.response.send_message(
-                    "Set your Minecraft username first (`/setmc`).", ephemeral=True
+                    "Set your Minecraft username first.", ephemeral=True
                 )
                 return
 
@@ -82,14 +124,7 @@ class VoteView(discord.ui.View):
         finally:
             db.close()
 
-    @discord.ui.button(
-        label="Veto",
-        style=discord.ButtonStyle.secondary,
-        custom_id="vote_admin_veto",
-        emoji="\U0001f6ab",
-        row=1,
-    )
-    async def admin_veto(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _admin_veto(self, interaction: discord.Interaction):
         db = SessionLocal()
         try:
             user = _get_user(db, interaction.user.id)
@@ -113,14 +148,7 @@ class VoteView(discord.ui.View):
         finally:
             db.close()
 
-    @discord.ui.button(
-        label="Force Pass",
-        style=discord.ButtonStyle.secondary,
-        custom_id="vote_admin_force_pass",
-        emoji="\u26a1",
-        row=1,
-    )
-    async def admin_force_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _admin_force_pass(self, interaction: discord.Interaction):
         db = SessionLocal()
         try:
             user = _get_user(db, interaction.user.id)
@@ -144,80 +172,8 @@ class VoteView(discord.ui.View):
         finally:
             db.close()
 
-class AdminVoteView(discord.ui.View):
-    """Admin-only buttons for veto/force-pass — kept for backwards compat."""
 
-    def __init__(self, vote_id: int):
-        super().__init__(timeout=None)
-        self.vote_id = vote_id
-
-    @discord.ui.button(
-        label="Veto",
-        style=discord.ButtonStyle.danger,
-        custom_id="admin_veto",
-        emoji="\U0001f6ab",
-    )
-    async def veto(self, interaction: discord.Interaction, button: discord.ui.Button):
-        db = SessionLocal()
-        try:
-            user = _get_user(db, interaction.user.id)
-            if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
-                return
-
-            vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
-            if not vote:
-                await interaction.response.send_message("Vote not found.", ephemeral=True)
-                return
-
-            mgr = VoteManager()
-            try:
-                mgr.veto(db, vote, user, source=EventSource.DISCORD)
-            except (ValueError, PermissionError) as e:
-                await interaction.response.send_message(str(e), ephemeral=True)
-                return
-
-            await interaction.response.send_message(
-                f"\U0001f6ab **{interaction.user.display_name}** vetoed the vote on **{vote.mod.name}**!"
-            )
-        finally:
-            db.close()
-
-    @discord.ui.button(
-        label="Force Pass",
-        style=discord.ButtonStyle.primary,
-        custom_id="admin_force_pass",
-        emoji="\u26a1",
-    )
-    async def force_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
-        db = SessionLocal()
-        try:
-            user = _get_user(db, interaction.user.id)
-            if not user or user.role != UserRole.ADMIN:
-                await interaction.response.send_message(
-                    "Admin access required.", ephemeral=True
-                )
-                return
-
-            vote = db.query(Vote).filter(Vote.id == self.vote_id).first()
-            if not vote:
-                await interaction.response.send_message("Vote not found.", ephemeral=True)
-                return
-
-            mgr = VoteManager()
-            try:
-                mgr.force_pass(db, vote, user, source=EventSource.DISCORD)
-            except (ValueError, PermissionError) as e:
-                await interaction.response.send_message(str(e), ephemeral=True)
-                return
-
-            await interaction.response.send_message(
-                f"\u26a1 **{interaction.user.display_name}** force-passed the vote on **{vote.mod.name}**!"
-            )
-        finally:
-            db.close()
+# ── Remove Mod View ──────────────────────────────────────────────────
 
 
 class RemoveModView(discord.ui.View):
@@ -227,15 +183,16 @@ class RemoveModView(discord.ui.View):
         super().__init__(timeout=None)
         self.mod_id = mod_id
 
-    @discord.ui.button(
-        label="Vote to Remove",
-        style=discord.ButtonStyle.danger,
-        custom_id="mod_remove_vote",
-        emoji="\U0001f5d1",
-    )
-    async def vote_remove(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+        btn = discord.ui.Button(
+            label="Vote to Remove",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"mod_remove:{mod_id}",
+            emoji="\U0001f5d1",
+        )
+        btn.callback = self._vote_remove
+        self.add_item(btn)
+
+    async def _vote_remove(self, interaction: discord.Interaction):
         from models import Mod, ModStatus, VoteType
 
         db = SessionLocal()
@@ -248,7 +205,7 @@ class RemoveModView(discord.ui.View):
                 return
             if not user.mc_username:
                 await interaction.response.send_message(
-                    "Set your Minecraft username first (`/setmc`).",
+                    "Set your Minecraft username first.",
                     ephemeral=True,
                 )
                 return
@@ -274,11 +231,14 @@ class RemoveModView(discord.ui.View):
                 return
 
             await interaction.response.send_message(
-                f"🗳️ Removal vote started for **{mod.name}** — check the votes channel.",
+                f"\U0001f5f3\ufe0f Removal vote started for **{mod.name}** — check the votes channel.",
                 ephemeral=True,
             )
         finally:
             db.close()
+
+
+# ── Upload Approval View ─────────────────────────────────────────────
 
 
 class UploadApprovalView(discord.ui.View):
@@ -288,12 +248,23 @@ class UploadApprovalView(discord.ui.View):
         super().__init__(timeout=None)
         self.upload_id = upload_id
 
-    @discord.ui.button(
-        label="Approve",
-        style=discord.ButtonStyle.success,
-        custom_id="upload_approve",
-    )
-    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        approve_btn = discord.ui.Button(
+            label="Approve",
+            style=discord.ButtonStyle.success,
+            custom_id=f"upload_approve:{upload_id}",
+        )
+        approve_btn.callback = self._approve
+        self.add_item(approve_btn)
+
+        reject_btn = discord.ui.Button(
+            label="Reject",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"upload_reject:{upload_id}",
+        )
+        reject_btn.callback = self._reject
+        self.add_item(reject_btn)
+
+    async def _approve(self, interaction: discord.Interaction):
         db = SessionLocal()
         try:
             user = _get_user(db, interaction.user.id)
@@ -329,12 +300,7 @@ class UploadApprovalView(discord.ui.View):
         finally:
             db.close()
 
-    @discord.ui.button(
-        label="Reject",
-        style=discord.ButtonStyle.danger,
-        custom_id="upload_reject",
-    )
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _reject(self, interaction: discord.Interaction):
         db = SessionLocal()
         try:
             user = _get_user(db, interaction.user.id)
@@ -397,3 +363,12 @@ class UploadApproveModal(discord.ui.Modal, title="Approve Upload"):
             )
         finally:
             db.close()
+
+
+# Keep for backwards compat — old messages might reference these custom_ids
+class AdminVoteView(discord.ui.View):
+    """Legacy view — no longer used for new messages."""
+
+    def __init__(self, vote_id: int):
+        super().__init__(timeout=None)
+        self.vote_id = vote_id

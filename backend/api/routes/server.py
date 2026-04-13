@@ -173,7 +173,17 @@ async def download_modpack(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    """Download a ZIP containing the mod list as JSON + TXT."""
+    """Download a ZIP containing all active mod JARs + a manifest.
+
+    Resolves each mod's file from:
+      1. The live server mods/ directory  (most reliable — exact version running)
+      2. The mod cache directory           (CurseForge downloads)
+      3. The mod's file_path column        (uploaded mods)
+    """
+    settings = get_settings()
+    server_mods_dir = Path(settings.server_path) / "mods"
+    cache_dir = Path(settings.mod_cache_dir)
+
     active = (
         db.query(Mod)
         .filter(Mod.status == ModStatus.ACTIVE)
@@ -182,24 +192,70 @@ async def download_modpack(
     )
 
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Text list
-        lines = [f"MineShare Mod List ({len(active)} mods)", "=" * 50, ""]
-        for m in active:
-            line = f"• {m.name}"
-            if m.author:
-                line += f" (by {m.author})"
-            if m.current_version:
-                line += f" — {m.current_version}"
-            if m.source_url:
-                line += f"\n  {m.source_url}"
-            lines.append(line)
-        zf.writestr("modlist.txt", "\n".join(lines))
+    included: list[dict] = []
+    missing: list[str] = []
 
-        # JSON manifest
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        # ── Pack each mod JAR ──
+        for m in active:
+            jar_path: Path | None = None
+
+            if m.file_name:
+                # Priority 1: server mods folder (always the live version)
+                candidate = server_mods_dir / m.file_name
+                if candidate.is_file():
+                    jar_path = candidate
+                else:
+                    # Priority 2: mod cache (CurseForge downloads)
+                    candidate = cache_dir / m.file_name
+                    if candidate.is_file():
+                        jar_path = candidate
+
+            # Priority 3: explicit file_path (uploaded mods)
+            if jar_path is None and m.file_path:
+                candidate = Path(m.file_path)
+                if candidate.is_file():
+                    jar_path = candidate
+
+            if jar_path is not None:
+                arc_name = f"mods/{jar_path.name}"
+                try:
+                    zf.write(str(jar_path), arcname=arc_name)
+                    included.append({
+                        "name": m.name,
+                        "file": jar_path.name,
+                        "source": m.source.value if m.source else "unknown",
+                    })
+                except Exception:
+                    missing.append(f"{m.name} ({m.file_name}) — read error")
+            else:
+                missing.append(
+                    f"{m.name} ({m.file_name or 'no file'}) — file not found on disk"
+                )
+
+        # ── Manifest files ──
+        lines = [
+            f"MineShare Modpack — {len(included)} mods included",
+            "=" * 55,
+            "",
+            "Drop the contents of the mods/ folder into your",
+            "Minecraft instance's mods/ directory.",
+            "",
+        ]
+        if missing:
+            lines.append(f"⚠  {len(missing)} mod(s) could NOT be included:")
+            for msg in missing:
+                lines.append(f"   • {msg}")
+            lines.append("")
+        lines.append("Included mods:")
+        for entry in included:
+            lines.append(f"  • {entry['name']}  —  {entry['file']}")
+        zf.writestr("README.txt", "\n".join(lines))
+
         manifest = {
             "name": "MineShare Modpack",
-            "mod_count": len(active),
+            "mod_count": len(included),
+            "missing_count": len(missing),
             "mods": [
                 {
                     "name": m.name,
@@ -214,19 +270,6 @@ async def download_modpack(
             ],
         }
         zf.writestr("modlist.json", json.dumps(manifest, indent=2))
-
-        # CurseForge HTML page with links
-        html_lines = [
-            "<html><head><title>MineShare Mod List</title></head><body>",
-            f"<h1>MineShare Mod List ({len(active)} mods)</h1><ul>",
-        ]
-        for m in active:
-            if m.source_url:
-                html_lines.append(f'<li><a href="{m.source_url}">{m.name}</a> by {m.author or "Unknown"}</li>')
-            else:
-                html_lines.append(f"<li>{m.name} by {m.author or 'Unknown'}</li>")
-        html_lines.append("</ul></body></html>")
-        zf.writestr("modlist.html", "\n".join(html_lines))
 
     buf.seek(0)
     return StreamingResponse(

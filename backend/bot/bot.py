@@ -39,6 +39,27 @@ def create_bot() -> commands.Bot:
             )
         )
 
+        # Re-register persistent views so buttons survive restarts.
+        # We need one view per active vote / upload / mod so the
+        # custom_id → callback mapping is restored.
+        from bot.views import RemoveModView, UploadApprovalView, VoteView
+        from core.database import SessionLocal
+        from models import Mod, ModStatus, ModUpload, UploadStatus, Vote, VoteStatus
+
+        db = SessionLocal()
+        try:
+            for v in db.query(Vote).filter(Vote.status == VoteStatus.PENDING).all():
+                bot.add_view(VoteView(v.id))
+            for u in db.query(ModUpload).filter(ModUpload.status == UploadStatus.PENDING_APPROVAL).all():
+                bot.add_view(UploadApprovalView(u.id))
+            for m in db.query(Mod).filter(Mod.status == ModStatus.ACTIVE).all():
+                bot.add_view(RemoveModView(m.id))
+            logger.info("Persistent views re-registered")
+        except Exception:
+            logger.exception("Failed to re-register persistent views")
+        finally:
+            db.close()
+
         # Sync slash commands
         try:
             guild = discord.Object(id=int(settings.discord_guild_id))
