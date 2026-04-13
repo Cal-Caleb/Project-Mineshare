@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build: 
@@ -7,15 +5,44 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/modserver
-      - DISCORD_BOT_TOKEN=your_discord_bot_token
-      - JWT_SECRET=your_jwt_secret
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+      - ./backend/opt/minecraft/server:/opt/minecraft/server
+      - ./backend/opt/minecraft/backups:/opt/minecraft/backups
+      - ./backend/opt/minecraft/uploads:/opt/minecraft/uploads
+      - ./backend/opt/minecraft/quarantine:/opt/minecraft/quarantine
+      - ./backend/opt/minecraft/mod_cache:/opt/minecraft/mod_cache
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  bot:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+      - ./backend/opt/minecraft/server:/opt/minecraft/server
+      - ./backend/opt/minecraft/backups:/opt/minecraft/backups
+      - ./backend/opt/minecraft/uploads:/opt/minecraft/uploads
+      - ./backend/opt/minecraft/quarantine:/opt/minecraft/quarantine
+      - ./backend/opt/minecraft/mod_cache:/opt/minecraft/mod_cache
+    command: python discord_bot.py
+    restart: unless-stopped
 
   frontend:
     build: 
@@ -27,21 +54,27 @@ services:
       - backend
     volumes:
       - ./frontend:/app
+      - /app/node_modules
     command: npm run dev
 
   db:
-    image: postgres:15
+    image: postgres:16
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=modserver
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: modserver
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d modserver"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
     ports:
       - "6379:6379"
 

@@ -1,120 +1,322 @@
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-from dataclasses import dataclass
-from enum import Enum
+import asyncio
+import logging
+from datetime import UTC, datetime, timedelta
 
-class VoteType(Enum):
-    ADD = "add"
-    REMOVE = "remove"
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-class VoteStatus(Enum):
-    PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    VETOED = "vetoed"
+from core.config import get_settings
+from core.events import (
+    CHANNEL_VOTE_CAST,
+    CHANNEL_VOTE_CREATED,
+    CHANNEL_VOTE_RESOLVED,
+    get_event_bus,
+)
+from models import (
+    AuditLog,
+    EventSource,
+    Mod,
+    ModStatus,
+    User,
+    UserRole,
+    Vote,
+    VoteBallot,
+    VoteStatus,
+    VoteType,
+)
 
-@dataclass
-class Vote:
-    id: int
-    mod_id: int
-    vote_type: VoteType
-    initiated_by: str
-    created_at: datetime
-    expires_at: datetime
-    status: VoteStatus
-    votes: Dict[str, bool]  # user_id -> vote (True/False)
-    vetoed_by: Optional[str] = None
-    force_approved_by: Optional[str] = None
+logger = logging.getLogger(__name__)
+_background_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
+
+
+def _publish(channel: str, data: dict) -> None:
+    """Best-effort fire-and-forget publish from sync context."""
+    try:
+        bus = get_event_bus()
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(bus.publish(channel, data))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+        except RuntimeError:
+            asyncio.run(bus.publish(channel, data))
+    except Exception:
+        logger.exception("Failed to publish %s", channel)
+
 
 class VoteManager:
-    def __init__(self, quorum: int = 1, majority_required: int = 1):
-        self.quorum = quorum
-        self.majority_required = majority_required
-        self.votes: Dict[int, Vote] = {}
-    
-    def create_vote(self, mod_id: int, vote_type: VoteType, initiated_by: str, 
-                   duration_hours: int = 24) -> Vote:
-        """Create a new vote"""
-        vote_id = len(self.votes) + 1
-        expires_at = datetime.now() + timedelta(hours=duration_hours)
-        
-        vote = Vote(
-            id=vote_id,
-            mod_id=mod_id,
-            vote_type=vote_type,
-            initiated_by=initiated_by,
-            created_at=datetime.now(),
-            expires_at=expires_at,
-            status=VoteStatus.PENDING,
-            votes={}
+    def __init__(self):
+        settings = get_settings()
+        self.duration_hours = settings.vote_duration_hours
+
+    # ── Create ───────────────────────────────────────────────────────
+
+    def create_vote(
+        self,
+        db: Session,
+        mod: Mod,
+        vote_type: VoteType,
+        user: User,
+        source: EventSource = EventSource.WEB,
+    ) -> Vote:
+        # Check for existing active vote on this mod
+        existing = (
+            db.query(Vote)
+            .filter(
+                Vote.mod_id == mod.id,
+                Vote.status == VoteStatus.PENDING,
+            )
+            .first()
         )
-        
-        self.votes[vote_id] = vote
+        if existing:
+            raise ValueError(f"An active vote already exists for '{mod.name}'")
+
+        # Removal votes can only be started by the original adder or admin
+        if vote_type == VoteType.REMOVE and mod.added_by_id != user.id and user.role != UserRole.ADMIN:
+            raise PermissionError("Only the original adder or an admin can initiate removal")
+
+        now = datetime.now(UTC)
+        vote = Vote(
+            mod_id=mod.id,
+            vote_type=vote_type,
+            initiated_by_id=user.id,
+            status=VoteStatus.PENDING,
+            created_at=now,
+            expires_at=now + timedelta(hours=self.duration_hours),
+        )
+        db.add(vote)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action=f"vote_created_{vote_type.value}",
+                details=f"Vote to {vote_type.value} '{mod.name}'",
+                source=source,
+            )
+        )
+        db.commit()
+        db.refresh(vote)
+
+        _publish(
+            CHANNEL_VOTE_CREATED,
+            {
+                "vote_id": vote.id,
+                "mod_id": mod.id,
+                "mod_name": mod.name,
+                "mod_description": mod.description or "",
+                "mod_author": mod.author or "Unknown",
+                "mod_source": mod.source.value,
+                "vote_type": vote_type.value,
+                "initiated_by": user.discord_username,
+                "expires_at": vote.expires_at.isoformat(),
+                "source": source.value,
+                # If already posted by the triggering Discord command, the bot
+                # will skip re-posting based on presence of these fields.
+                "has_discord_message": False,
+            },
+        )
         return vote
-    
-    def vote(self, vote_id: int, user_id: str, vote: bool) -> bool:
-        """Cast a vote"""
-        if vote_id not in self.votes:
-            return False
-            
-        vote_obj = self.votes[vote_id]
-        
-        # Check if vote has expired
-        if datetime.now() > vote_obj.expires_at:
-            return False
-            
-        # Check if user already voted
-        if user_id in vote_obj.votes:
-            return False
-            
-        vote_obj.votes[user_id] = vote
-        self._evaluate_vote(vote_id)
-        return True
-    
-    def veto(self, vote_id: int, user_id: str) -> bool:
-        """Veto a vote (Role 2 only)"""
-        if vote_id not in self.votes:
-            return False
-            
-        vote_obj = self.votes[vote_id]
-        if vote_obj.status != VoteStatus.PENDING:
-            return False
-            
-        vote_obj.status = VoteStatus.VETOED
-        vote_obj.vetoed_by = user_id
-        return True
-    
-    def force_approve(self, vote_id: int, user_id: str) -> bool:
-        """Force approve a vote (Role 2 only)"""
-        if vote_id not in self.votes:
-            return False
-            
-        vote_obj = self.votes[vote_id]
-        if vote_obj.status != VoteStatus.PENDING:
-            return False
-            
-        vote_obj.status = VoteStatus.APPROVED
-        vote_obj.force_approved_by = user_id
-        return True
-    
-    def _evaluate_vote(self, vote_id: int) -> None:
-        """Evaluate if vote should be approved/rejected"""
-        vote_obj = self.votes[vote_id]
-        
-        if vote_obj.status != VoteStatus.PENDING:
-            return
-            
-        # Check if quorum is met
-        total_votes = len(vote_obj.votes)
-        if total_votes < self.quorum:
-            return  # Not enough votes yet
-            
-        # Count yes/no votes
-        yes_votes = sum(1 for v in vote_obj.votes.values() if v)
-        no_votes = total_votes - yes_votes
-        
-        # Check if majority is reached
-        if yes_votes >= self.majority_required:
-            vote_obj.status = VoteStatus.APPROVED
-        elif no_votes >= self.majority_required:
-            vote_obj.status = VoteStatus.REJECTED
+
+    # ── Cast ─────────────────────────────────────────────────────────
+
+    def cast_vote(
+        self,
+        db: Session,
+        vote: Vote,
+        user: User,
+        in_favor: bool,
+        source: EventSource = EventSource.WEB,
+    ) -> VoteBallot:
+        if vote.status != VoteStatus.PENDING:
+            raise ValueError("This vote is no longer active")
+
+        expires_at = vote.expires_at.replace(tzinfo=UTC) if vote.expires_at.tzinfo is None else vote.expires_at
+        if datetime.now(UTC) > expires_at:
+            self._expire_vote(db, vote)
+            raise ValueError("This vote has expired")
+
+        # DB unique constraint prevents double-voting; catch it gracefully
+        existing = db.query(VoteBallot).filter(VoteBallot.vote_id == vote.id, VoteBallot.user_id == user.id).first()
+        if existing:
+            if existing.in_favor == in_favor:
+                raise ValueError("You have already voted this way")
+            existing.in_favor = in_favor
+            existing.cast_at = datetime.now(UTC)
+            db.add(
+                AuditLog(
+                    user_id=user.id,
+                    action="vote_changed",
+                    details=f"Changed to {'Yes' if in_favor else 'No'} on '{vote.mod.name}'",
+                    source=source,
+                )
+            )
+            db.commit()
+            db.refresh(existing)
+            self._broadcast_cast(db, vote, user, in_favor)
+            return existing
+
+        ballot = VoteBallot(
+            vote_id=vote.id,
+            user_id=user.id,
+            in_favor=in_favor,
+        )
+        db.add(ballot)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="vote_cast",
+                details=f"{'Yes' if in_favor else 'No'} on '{vote.mod.name}'",
+                source=source,
+            )
+        )
+        db.commit()
+        db.refresh(ballot)
+        self._broadcast_cast(db, vote, user, in_favor)
+        return ballot
+
+    def _broadcast_cast(self, db: Session, vote: Vote, user: User, in_favor: bool) -> None:
+        tally = self.get_tally(db, vote)
+        _publish(
+            CHANNEL_VOTE_CAST,
+            {
+                "vote_id": vote.id,
+                "mod_name": vote.mod.name,
+                "user": user.discord_username,
+                "in_favor": in_favor,
+                "tally": tally,
+                "status": vote.status.value,
+            },
+        )
+
+    # ── Admin Actions ────────────────────────────────────────────────
+
+    def veto(
+        self,
+        db: Session,
+        vote: Vote,
+        admin: User,
+        source: EventSource = EventSource.WEB,
+    ) -> Vote:
+        if admin.role != UserRole.ADMIN:
+            raise PermissionError("Only admins can veto")
+        if vote.status != VoteStatus.PENDING:
+            raise ValueError("This vote is no longer active")
+
+        vote.status = VoteStatus.VETOED
+        vote.resolved_at = datetime.now(UTC)
+        vote.resolved_by_id = admin.id
+        self._apply_rejection(db, vote)
+
+        db.add(
+            AuditLog(
+                user_id=admin.id,
+                action="vote_vetoed",
+                details=f"Vetoed vote on '{vote.mod.name}'",
+                source=source,
+            )
+        )
+        db.commit()
+        db.refresh(vote)
+        self._broadcast_resolved(db, vote, admin.discord_username)
+        return vote
+
+    def force_pass(
+        self,
+        db: Session,
+        vote: Vote,
+        admin: User,
+        source: EventSource = EventSource.WEB,
+    ) -> Vote:
+        if admin.role != UserRole.ADMIN:
+            raise PermissionError("Only admins can force pass")
+        if vote.status != VoteStatus.PENDING:
+            raise ValueError("This vote is no longer active")
+
+        vote.status = VoteStatus.FORCE_APPROVED
+        vote.resolved_at = datetime.now(UTC)
+        vote.resolved_by_id = admin.id
+
+        self._apply_result(db, vote)
+
+        db.add(
+            AuditLog(
+                user_id=admin.id,
+                action="vote_force_passed",
+                details=f"Force-passed vote on '{vote.mod.name}'",
+                source=source,
+            )
+        )
+        db.commit()
+        db.refresh(vote)
+        self._broadcast_resolved(db, vote, admin.discord_username)
+        return vote
+
+    def _broadcast_resolved(self, db: Session, vote: Vote, by: str | None = None) -> None:
+        tally = self.get_tally(db, vote)
+        _publish(
+            CHANNEL_VOTE_RESOLVED,
+            {
+                "vote_id": vote.id,
+                "mod_id": vote.mod.id,
+                "mod_name": vote.mod.name,
+                "status": vote.status.value,
+                "tally": tally,
+                "by": by,
+                "discord_message_id": vote.discord_message_id,
+                "discord_channel_id": vote.discord_channel_id,
+            },
+        )
+
+    # ── Expiration ───────────────────────────────────────────────────
+
+    def expire_stale_votes(self, db: Session) -> list[Vote]:
+        """Find and expire all votes past their deadline."""
+        now = datetime.now(UTC)
+        stale = db.query(Vote).filter(Vote.status == VoteStatus.PENDING, Vote.expires_at <= now).all()
+        expired = []
+        for vote in stale:
+            self._expire_vote(db, vote)
+            expired.append(vote)
+        if expired:
+            db.commit()
+            for vote in expired:
+                self._broadcast_resolved(db, vote)
+        return expired
+
+    # ── Tallies ──────────────────────────────────────────────────────
+
+    def get_tally(self, db: Session, vote: Vote) -> dict:
+        yes = db.query(func.count()).filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(True)).scalar()
+        no = db.query(func.count()).filter(VoteBallot.vote_id == vote.id, VoteBallot.in_favor.is_(False)).scalar()
+        return {"yes": yes, "no": no, "total": yes + no}
+
+    def get_active_votes(self, db: Session) -> list[Vote]:
+        self.expire_stale_votes(db)
+        return db.query(Vote).filter(Vote.status == VoteStatus.PENDING).all()
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    def _expire_vote(self, db: Session, vote: Vote) -> None:
+        # On expiry: strict majority approves, otherwise rejected (ties = rejected)
+        tally = self.get_tally(db, vote)
+        if tally["total"] > 0 and tally["yes"] > tally["no"]:
+            vote.status = VoteStatus.APPROVED
+            self._apply_result(db, vote)
+        else:
+            vote.status = VoteStatus.REJECTED
+            self._apply_rejection(db, vote)
+        vote.resolved_at = datetime.now(UTC)
+
+    def _apply_result(self, db: Session, vote: Vote) -> None:
+        """Apply the outcome of a successful vote to the mod."""
+        mod = vote.mod
+        if vote.vote_type == VoteType.ADD:
+            mod.status = ModStatus.ACTIVE
+        elif vote.vote_type == VoteType.REMOVE:
+            mod.status = ModStatus.REMOVED
+
+    def _apply_rejection(self, db: Session, vote: Vote) -> None:
+        """Apply the outcome of a failed/vetoed vote to the mod."""
+        mod = vote.mod
+        if vote.vote_type == VoteType.ADD:
+            mod.status = ModStatus.REMOVED
+        # For removal votes that fail, mod stays ACTIVE (no change needed)
